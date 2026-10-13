@@ -38,7 +38,7 @@ Runs tensorQTL cis permutation testing for splicing QTLs. A `phenotype_groups` f
 | `memory` | `Int` | Memory to allocate in GB |
 | `disk_space` | `Int` | Disk space to allocate in GB |
 | `num_threads` | `Int` | Number of CPU threads |
-| `num_gpus` | `Int` | Number of GPUs (nvidia-tesla-p100) |
+| `num_gpus` | `Int` | Number of GPUs; the eQTL default machine includes one L4 |
 | `num_preempt` | `Int` | Number of preemptible retries |
 
 ### Optional inputs
@@ -50,7 +50,7 @@ Runs tensorQTL cis permutation testing for splicing QTLs. A `phenotype_groups` f
 | `qvalue_lambda` | `Float` | – | Lambda parameter for q-value calculation |
 | `pval_threshold` | `Float` | – | p-value threshold to filter nominal results |
 | `seed` | `Int` | – | Random seed for reproducibility |
-| `flags` | `String` | – | Additional flags to pass directly to tensorQTL |
+| `flags` | `String` | – | Additional tensorQTL arguments; the eQTL workflow parses shell-style quotes without executing shell expressions |
 
 ---
 
@@ -138,7 +138,49 @@ Tasks run inside a Docker container:
 gcr.io/broad-cga-francois-gtex/tensorqtl:latest
 ```
 
-GPU acceleration is enabled by default (`nvidia-tesla-p100`). Workflows are designed to run on Google Cloud Platform (zone `us-central1-c`) via Terra / Cromwell, but any WDL-compatible runner with GPU support can be used.
+The eQTL workflow uses WDL 1.0 and targets Terra managed Cromwell. Its
+runtime defaults to `g2-standard-16`, NVIDIA L4, and `us-central1-c`.
+Existing input keys retain the prefix
+`tensorqtl_cis_permutations_workflow.tensorqtl_cis_permutations.`.
+
+| eQTL input | Type | Default |
+|---|---|---|
+| `machine_type` | `String?` | `g2-standard-16` |
+| `gpu_type` | `String` | `nvidia-l4` |
+| `zones` | `Array[String]` | `["us-central1-c"]` |
+
+A predefined machine type selects its own CPU, memory, and GPUs. Cromwell
+ignores `num_threads`, `memory`, `gpu_type`, and `num_gpus` for that selection.
+Use `num_threads=16`, `memory=64` (GB), and `num_gpus=1` with the default machine.
+To select another predefined GPU machine, set `machine_type` to a compatible
+type such as `a2-highgpu-1g` (one A100), and choose zones that support it.
+
+To request an attached GPU such as a T4, set `machine_type` to `null`.
+Cromwell then selects a machine from `num_threads`, `memory`, `gpu_type`,
+and `num_gpus`. Add these entries to the existing Terra workflow inputs:
+
+```json
+{
+  "tensorqtl_cis_permutations_workflow.tensorqtl_cis_permutations.machine_type": null,
+  "tensorqtl_cis_permutations_workflow.tensorqtl_cis_permutations.gpu_type": "nvidia-tesla-t4",
+  "tensorqtl_cis_permutations_workflow.tensorqtl_cis_permutations.num_gpus": 1,
+  "tensorqtl_cis_permutations_workflow.tensorqtl_cis_permutations.zones": ["us-central1-c"]
+}
+```
+
+The selected GPU must have sufficient regional quota and available capacity.
+The global GPU quota can also apply. Changing the GPU type can avoid the L4
+quota limit, but it does not guarantee that the job will start.
+See [Cromwell runtime attributes](https://cromwell.readthedocs.io/en/stable/RuntimeAttributes/#predefinedmachinetype-alpha)
+and [Google Cloud GPU quotas](https://docs.cloud.google.com/compute/resource-usage#gpu_quota).
+
+The eQTL task logs validation and mapping stages. Input files remain typed
+`File` values until command rendering. The task checks localized paths and
+links all three PLINK files to one basename. Optional arguments are passed
+only when present. The output prefix must start with a letter or digit and
+contain only letters, digits, dots, underscores, or hyphens.
+
+The sQTL workflow retains its existing runtime and input interface.
 
 A GitHub Actions workflow (`.github/workflows/docker-image.yml`) is included for building and pushing a custom Docker image to `ghcr.io` if needed.
 
@@ -153,3 +195,22 @@ Both WDL workflows are registered on Dockstore via `.dockstore.yml`:
 | `tensorQTL_permutation` | `workflows/tensorqtl_cis_permutations.wdl` |
 | `tensorQTL_permutation_sQTL` | `workflows/tensorqtl_cis_permutations_sQTL.wdl` |
 
+
+## Validation
+
+GitHub Actions validates the eQTL WDL and runs command tests. Tests cover L4
+defaults, machine/GPU/zone overrides, T4 selection without a predefined machine,
+optional arguments, safe path quoting, and unresolved cloud URI rejection.
+An AST check rejects workflow-scope file-writing functions. These checks do
+not build or publish a Docker image.
+
+Local checks:
+
+```bash
+miniwdl check workflows/tensorqtl_cis_permutations.wdl
+python -m unittest discover -s tests
+```
+
+Command tests use a tensorQTL test double. They do not validate the tensorQTL
+engine, the production container, GPU execution, or Terra localization.
+The complete workflow has not been tested on Terra.

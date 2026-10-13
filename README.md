@@ -68,6 +68,7 @@ GitHub Actions checks WDL syntax, runtime defaults and overrides, the rendered c
 files, safe path quoting, and rejection of unresolved cloud URIs. An AST check
 rejects workflow-scope file-writing functions. A CPU smoke test runs the actual
 tensorQTL engine on generated PLINK2 data and checks a known association.
+The smoke environment pins PyArrow and checks its Parquet import before mapping.
 No local Docker build is required.
 
 CPU and command tests do not validate GPU execution, the production image, or

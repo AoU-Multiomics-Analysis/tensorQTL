@@ -15,6 +15,9 @@ task tensorqtl_cis_nominal {
         Int num_threads
         Int num_gpus = 1
         Int num_preempt
+        String? machine_type = "g2-standard-16"
+        String gpu_type = "nvidia-l4"
+        Array[String] zones = ["us-central1-c"]
     }
 
     command <<<
@@ -60,10 +63,10 @@ task tensorqtl_cis_nominal {
         bootDiskSizeGb: 25
         cpu: num_threads
         preemptible: num_preempt
-        predefinedMachineType: "g2-standard-16"
-        gpuType: "nvidia-l4"
+        predefinedMachineType: machine_type
+        gpuType: gpu_type
         gpuCount: num_gpus
-        zones: ["us-central1-c"]
+        zones: zones
     }
 
 
@@ -71,6 +74,12 @@ task tensorqtl_cis_nominal {
         Array[File] chr_parquet = glob(prefix + "*.parquet")
         File log = glob(prefix + "*.log")[0]
     }
+    parameter_meta {
+        machine_type: "GCP machine type. Default: g2-standard-16 with L4. Set null to use cpu, memory, gpu_type, and num_gpus."
+        gpu_type: "GCP GPU type. Default: nvidia-l4. Used when machine_type is null; a predefined machine selects its own GPUs."
+        zones: "GCP zones that support the selected machine and GPU. Default: us-central1-c."
+    }
+
     meta {
         author: "Francois Aguet"
     }

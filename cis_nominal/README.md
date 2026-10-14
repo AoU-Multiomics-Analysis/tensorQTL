@@ -19,14 +19,18 @@ The machine type, GPU type, and zones are configurable:
 | `gpu_type` | `String` | `nvidia-l4` |
 | `zones` | `Array[String]` | `["us-central1-c"]` |
 
-A predefined machine type selects its own CPU, memory, and GPUs. Cromwell
-ignores `num_threads`, `memory`, `gpu_type`, and `num_gpus` for that selection.
-For example, select `a2-highgpu-1g` to request a machine with one A100 GPU.
+A predefined machine type fixes the CPU count and memory. The GPU type and
+count must be compatible with that machine.
+For example, select `a2-highgpu-1g` with `gpu_type="nvidia-tesla-a100"`
+and `num_gpus=1` to request a machine with one A100 GPU.
 Select zones that support that machine and have sufficient quota and capacity.
 
-To request an attached GPU such as a T4, set `machine_type` to `null`.
-Cromwell then selects a machine from `num_threads`, `memory`, `gpu_type`,
-and `num_gpus`. Add these entries to the existing Terra workflow inputs:
+To request an attached GPU such as a T4, set `machine_type` to `null`
+or an empty string. The runtime expression converts `null` to an empty
+`String`. Google Batch then selects a machine from `num_threads`, `memory`,
+`gpu_type`, and `num_gpus`. A direct `String?` runtime value causes
+`Invalid 'predefinedMachineType': String value required but got String?`.
+Add these entries to the existing Terra workflow inputs:
 
 ```json
 {
@@ -66,10 +70,13 @@ nominal cis mode and analysis options are preserved.
 
 GitHub Actions checks WDL syntax, runtime defaults and overrides, the rendered command, optional
 files, safe path quoting, and rejection of unresolved cloud URIs. An AST check
-rejects workflow-scope file-writing functions. A CPU smoke test runs the actual
-tensorQTL engine on generated PLINK2 data and checks a known association.
+rejects workflow-scope file-writing functions. A runtime check rejects an
+optional machine-type expression and checks automatic machine selection inputs.
+A CPU smoke test runs the actual tensorQTL engine on generated PLINK2 data
+and checks a known association.
 The smoke environment pins PyArrow and checks its Parquet import before mapping.
 No local Docker build is required.
 
 CPU and command tests do not validate GPU execution, the production image, or
-Terra localization. The complete workflow has not been tested on Terra.
+Terra localization. The complete workflow with this runtime correction has
+not been tested on Terra.

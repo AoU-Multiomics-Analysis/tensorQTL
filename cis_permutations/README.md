@@ -5,7 +5,7 @@ This repository contains WDL workflows for running **cis-QTL mapping with permut
 | Workflow | WDL file | Use case |
 |---|---|---|
 | `tensorqtl_cis_permutations_workflow` | `workflows/tensorqtl_cis_permutations.wdl` | Standard cis-eQTL mapping (expression QTLs) |
-| `tensorqtl_cis_permutations_sqtl_workflow` | `workflows/tensorqtl_cis_permutations_sQTL.wdl` | cis-sQTL mapping (splicing QTLs) – requires a phenotype groups file |
+| `tensorqtl_cis_permutations_workflow` | `workflows/tensorqtl_cis_permutations_sQTL.wdl` | cis-sQTL mapping (splicing QTLs) – requires a phenotype groups file |
 
 The workflows are registered on [Dockstore](https://dockstore.org/) and intended to be executed on a platform that supports WDL (e.g. Terra / Cromwell). Each task runs tensorQTL in `cis` permutation mode and produces a genome-wide cis-QTL summary table.
 
@@ -180,9 +180,12 @@ links all three PLINK files to one basename. Optional arguments are passed
 only when present. The output prefix must start with a letter or digit and
 contain only letters, digits, dots, underscores, or hyphens.
 
-The sQTL workflow retains its existing runtime and input interface.
+The sQTL entry point uses the eQTL task and its runtime defaults.
+Its required groups input is `tensorqtl_cis_permutations_workflow.phenotype_groups`.
+Other task input keys keep the prefix `tensorqtl_cis_permutations_workflow.tensorqtl_cis_permutations.`.
+The file requires WDL 1.0. Keep its imported eQTL descriptor in the same directory.
 
-A GitHub Actions workflow (`.github/workflows/docker-image.yml`) is included for building and pushing a custom Docker image to `ghcr.io` if needed.
+The copied Dockerfile is an empty source placeholder. Its nested Docker Actions file is inactive.
 
 ---
 
@@ -198,7 +201,7 @@ Both WDL workflows are registered on Dockstore via `.dockstore.yml`:
 
 ## Validation
 
-GitHub Actions validates the eQTL WDL and runs command tests. Tests cover L4
+The root GitHub Actions workflow validates both WDL files and runs command tests. Tests cover L4
 defaults, machine/GPU/zone overrides, T4 selection without a predefined machine,
 optional arguments, safe path quoting, and unresolved cloud URI rejection.
 An AST check rejects workflow-scope file-writing functions. These checks do
@@ -208,6 +211,7 @@ Local checks:
 
 ```bash
 miniwdl check workflows/tensorqtl_cis_permutations.wdl
+miniwdl check workflows/tensorqtl_cis_permutations_sQTL.wdl
 python -m unittest discover -s tests
 ```
 

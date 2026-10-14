@@ -1,0 +1,38 @@
+name: Validate cis permutations WDL
+on:
+  pull_request:
+    paths: ['cis_permutations/**', '.dockstore.yml', '.github/workflows/validate-cis-permutations.yml']
+  push:
+    branches: [main]
+    paths: ['cis_permutations/**', '.dockstore.yml', '.github/workflows/validate-cis-permutations.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: cis_permutations
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install miniwdl==1.14.2
+      - name: Check eQTL and sQTL descriptors
+        run: |
+          miniwdl check workflows/tensorqtl_cis_permutations.wdl
+          miniwdl check workflows/tensorqtl_cis_permutations_sQTL.wdl
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Validate with the Cromwell WDL parser
+        run: |
+          curl --fail --location --retry 3 \
+            https://github.com/broadinstitute/cromwell/releases/download/92/womtool-92.jar \
+            --output "$RUNNER_TEMP/womtool-92.jar"
+          java -jar "$RUNNER_TEMP/womtool-92.jar" validate workflows/tensorqtl_cis_permutations.wdl
+          java -jar "$RUNNER_TEMP/womtool-92.jar" validate workflows/tensorqtl_cis_permutations_sQTL.wdl
+      - run: python -m unittest discover -s tests

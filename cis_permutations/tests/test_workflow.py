@@ -66,7 +66,8 @@ class WorkflowTests(unittest.TestCase):
             self.assertIn(key, doc.workflow.available_inputs)
             self.assertNotIn(key, doc.workflow.required_inputs)
 
-    def run_task(self, optional=False, cloud=None, options=None, localize_cloud=False):
+    def run_task(self, optional=False, cloud=None, options=None, localize_cloud=False,
+                 descriptor=WDL_FILE):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             inputs = dict(prefix='test', memory=64, disk_space=100,
@@ -83,7 +84,8 @@ class WorkflowTests(unittest.TestCase):
             inputs.update(options or {})
             if cloud:
                 inputs[cloud] = 'gs://bucket/input.tsv'
-            task = WDL.load(str(ROOT / WDL_FILE)).tasks[0]
+            doc = WDL.load(str(ROOT / descriptor))
+            task = doc.workflow.body[0].callee
             task_inputs = dict(inputs)
             if localize_cloud:
                 localized_paths = {'gs://bucket/' + key: inputs[key] for key in keys}

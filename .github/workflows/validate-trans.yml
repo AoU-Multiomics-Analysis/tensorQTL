@@ -16,7 +16,7 @@ jobs:
         working-directory: trans
     steps:
       - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v7
         with:
           python-version: '3.11'
       - run: pip install miniwdl==1.14.2 numpy==1.26.4 pandas==2.2.3 pyarrow==19.0.1

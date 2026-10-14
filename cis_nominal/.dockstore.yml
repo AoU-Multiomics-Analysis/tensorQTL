@@ -1,0 +1,5 @@
+version: 1.2
+workflows:
+  - name: tensorqtl_cis_nominal
+    subclass: WDL
+    primaryDescriptorPath: /tensorqtl_cis_nominal.wdl

@@ -1,4 +1,14 @@
 version: 1.2
 workflows:
-  - subclass: WDL 
-    primaryDescriptorPath: <Path> 
+  - name: tensorqtl_cis_nominal
+    subclass: WDL
+    primaryDescriptorPath: /cis_nominal/tensorqtl_cis_nominal.wdl
+  - name: tensorQTL_permutation
+    subclass: WDL
+    primaryDescriptorPath: /cis_permutations/workflows/tensorqtl_cis_permutations.wdl
+  - name: tensorQTL_permutation_sQTL
+    subclass: WDL
+    primaryDescriptorPath: /cis_permutations/workflows/tensorqtl_cis_permutations_sQTL.wdl
+  - name: tensorQTL_trans
+    subclass: WDL
+    primaryDescriptorPath: /trans/tensorQTL_trans.wdl

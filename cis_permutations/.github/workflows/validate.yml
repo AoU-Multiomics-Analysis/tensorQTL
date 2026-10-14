@@ -1,0 +1,21 @@
+name: Validate cis permutations WDL
+on:
+  pull_request:
+    paths: ['workflows/tensorqtl_cis_permutations.wdl', 'tests/**', '.github/workflows/validate.yml']
+  push:
+    branches: [main]
+    paths: ['workflows/tensorqtl_cis_permutations.wdl', 'tests/**', '.github/workflows/validate.yml']
+  workflow_dispatch:
+permissions:
+  contents: read
+jobs:
+  validate:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: '3.11'
+      - run: pip install miniwdl==1.14.2
+      - run: miniwdl check workflows/tensorqtl_cis_permutations.wdl
+      - run: python -m unittest discover -s tests

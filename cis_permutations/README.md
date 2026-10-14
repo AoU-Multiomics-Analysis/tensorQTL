@@ -149,15 +149,19 @@ Existing input keys retain the prefix
 | `gpu_type` | `String` | `nvidia-l4` |
 | `zones` | `Array[String]` | `["us-central1-c"]` |
 
-A predefined machine type selects its own CPU, memory, and GPUs. Cromwell
-ignores `num_threads`, `memory`, `gpu_type`, and `num_gpus` for that selection.
+A predefined machine type fixes the CPU count and memory. The GPU type and
+count must be compatible with that machine.
 Use `num_threads=16`, `memory=64` (GB), and `num_gpus=1` with the default machine.
 To select another predefined GPU machine, set `machine_type` to a compatible
 type such as `a2-highgpu-1g` (one A100), and choose zones that support it.
+Set `gpu_type="nvidia-tesla-a100"` and `num_gpus=1` for that example.
 
-To request an attached GPU such as a T4, set `machine_type` to `null`.
-Cromwell then selects a machine from `num_threads`, `memory`, `gpu_type`,
-and `num_gpus`. Add these entries to the existing Terra workflow inputs:
+To request an attached GPU such as a T4, set `machine_type` to `null`
+or an empty string. The runtime expression converts `null` to an empty
+`String`. Google Batch then selects a machine from `num_threads`, `memory`,
+`gpu_type`, and `num_gpus`. A direct `String?` runtime value causes
+`Invalid 'predefinedMachineType': String value required but got String?`.
+Add these entries to the existing Terra workflow inputs:
 
 ```json
 {

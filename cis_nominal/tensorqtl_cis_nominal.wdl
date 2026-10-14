@@ -63,7 +63,8 @@ task tensorqtl_cis_nominal {
         bootDiskSizeGb: 25
         cpu: num_threads
         preemptible: num_preempt
-        predefinedMachineType: machine_type
+        # Batch requires String. An empty string lets Batch select the machine.
+        predefinedMachineType: select_first([machine_type, ""])
         gpuType: gpu_type
         gpuCount: num_gpus
         zones: zones
@@ -75,8 +76,8 @@ task tensorqtl_cis_nominal {
         File log = glob(prefix + "*.log")[0]
     }
     parameter_meta {
-        machine_type: "GCP machine type. Default: g2-standard-16 with L4. Set null to use cpu, memory, gpu_type, and num_gpus."
-        gpu_type: "GCP GPU type. Default: nvidia-l4. Used when machine_type is null; a predefined machine selects its own GPUs."
+        machine_type: "GCP machine type. Default: g2-standard-16 with L4. Set null or an empty string to let Batch select the machine from cpu, memory, gpu_type, and num_gpus."
+        gpu_type: "GCP GPU type. Default: nvidia-l4. The GPU type and count must be compatible with the selected machine."
         zones: "GCP zones that support the selected machine and GPU. Default: us-central1-c."
     }
 

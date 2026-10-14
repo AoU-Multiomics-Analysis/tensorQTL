@@ -55,9 +55,20 @@ class WorkflowTests(unittest.TestCase):
     def test_t4_without_predefined_machine(self):
         values = self.runtime_values(machine_type=None,
                                      gpu_type='nvidia-tesla-t4', num_gpus=2)
-        self.assertIsNone(values['predefinedMachineType'])
+        self.assertEqual(values['predefinedMachineType'], '')
         self.assertEqual(values['gpuType'], 'nvidia-tesla-t4')
         self.assertEqual(values['gpuCount'], 2)
+
+    def test_machine_runtime_is_nonoptional_string(self):
+        # The sQTL workflow imports this task and uses the same runtime.
+        task = WDL.load(str(ROOT / WDL_FILE)).tasks[0]
+        self.assertEqual(task.runtime['predefinedMachineType'].type,
+                         WDL.Type.String())
+        for machine_type in [None, '', 'g2-standard-16', 'custom-80-524288']:
+            with self.subTest(machine_type=machine_type):
+                value = self.runtime_values(machine_type=machine_type)['predefinedMachineType']
+                self.assertIsInstance(value, str)
+                self.assertEqual(value, machine_type or '')
 
     def test_runtime_inputs_available_in_workflow(self):
         doc = WDL.load(str(ROOT / WDL_FILE))

@@ -21,7 +21,7 @@ jobs:
           python-version: '3.11'
       - run: pip install miniwdl==1.14.2 numpy==1.26.4 pandas==2.2.3 pyarrow==19.0.1
       - run: miniwdl check tensorQTL_trans.wdl
-      - uses: actions/setup-java@v4
+      - uses: actions/setup-java@v6
         with:
           distribution: temurin
           java-version: '17'

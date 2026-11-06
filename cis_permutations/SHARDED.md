@@ -146,13 +146,44 @@ the dosage mapping path. The image workflow runs that smoke test in its
 candidate container before publication. These Actions checks have been
 configured; a local check does not prove that they passed on GitHub.
 
-Files remain typed `File` values through task inputs and output structs.
-The preparation JSON is an output manifest, not an argument wrapper.
-Cromwell collects its typed `File` fields as task outputs. Merge receives an
+Preparation returns five explicit `Array[File]` outputs from `glob()`:
+PGEN, PVAR, PSAM, phenotype BED, and phenotype groups files. Each file type
+uses the same fixed-width shard basenames, such as `shard_000000`.
+WDL 1.0 specifies Bash filename order for `glob()`. The indexed scatter
+selects the same position from each array to keep each shard's files together.
+The task-local `shards.json` is audit metadata only. It does not declare
+shard files for transfer.
+
+Files remain typed `File` values through task inputs. Merge receives an
 explicit `Array[File]`; its newline list is created at command rendering,
 after localization. A static AST check rejects file writes at workflow
 scope. Command tests simulate cloud-to-local path rewriting for every new
 task, but do not prove Terra localization or GPU execution.
+
+## Terra output transfer error
+
+An earlier WDL used `read_json("shards.json")` to return shard files in
+struct fields. That output declaration can cause this error when a mapping
+task downloads its inputs:
+
+```text
+ERROR: (gcloud.storage.cp) The following URLs matched no objects or files:
+```
+
+Cromwell plans output transfers before the preparation command runs. At
+that time, it cannot read `shards.json` to find the shard file paths.
+Declaring its fields as `File` does not add those files to the transfer plan.
+The explicit `glob()` outputs let Cromwell plan transfers for all shard
+files. The mapping input download uses Cromwell's own `gcloud storage cp`
+command. See the [Cromwell Batch output collection code](https://github.com/broadinstitute/cromwell/blob/92/supportedBackends/google/batch/src/main/scala/cromwell/backend/google/batch/actors/GcpBatchAsyncBackendJobExecutionActor.scala#L844-L868).
+
+This correction changes only the WDL. The original image and preparation
+script can be used. No image rebuild is required. Refresh the workflow in
+Dockstore and Terra to use the corrected WDL. Run preparation again. Do not
+reuse the cached preparation result from the faulty WDL.
+
+The complete corrected workflow has not been tested on Terra. Local checks
+and GitHub Actions checks do not prove Terra output transfer behavior.
 
 Local checks:
 

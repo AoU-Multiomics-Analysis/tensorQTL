@@ -38,7 +38,7 @@ jobs:
           java -jar "$RUNNER_TEMP/womtool-92.jar" validate workflows/tensorqtl_cis_permutations_sQTL.wdl
           java -jar "$RUNNER_TEMP/womtool-92.jar" validate workflows/tensorqtl_cis_permutations_sharded.wdl
       - run: python -m unittest discover -s tests
-      - uses: mamba-org/setup-micromamba@v2
+      - uses: mamba-org/setup-micromamba@v3
         with:
           environment-name: sharded-smoke
           create-args: >-

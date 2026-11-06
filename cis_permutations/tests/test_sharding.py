@@ -168,6 +168,21 @@ class ShardingTests(unittest.TestCase):
         self.assertEqual(list(result.variant_id), ['NULL', 'NA'])
         self.assertEqual(list(result.group_id), ['None', 'NA'])
 
+    @unittest.skipUnless(importlib.util.find_spec('pandas'), 'pandas is required for smoke comparison checks')
+    def test_smoke_comparison_ignores_empty_shards_without_changing_numeric_types(self):
+        import pandas as pd
+        spec = importlib.util.spec_from_file_location('smoke_sharded', SCRIPT.parent.parent/'tests/smoke_sharded.py')
+        smoke = importlib.util.module_from_spec(spec)
+        spec.loader.exec_module(smoke)
+        empty, data = self.root/'empty.tsv', self.root/'data.tsv'
+        header = 'phenotype_id\tnum_var\tpval_beta\n'
+        empty.write_text(header)
+        data.write_text(header + 'A\t3\t0.1\nB\t1\t0.2\n')
+        observed = smoke.combine_results([empty, data])
+        expected = pd.DataFrame({'num_var': [3, 1], 'pval_beta': [0.1, 0.2]},
+                                index=pd.Index(['A', 'B'], name='phenotype_id'))
+        pd.testing.assert_frame_equal(observed, expected)
+
 
 if __name__ == '__main__':
     unittest.main()

@@ -9,7 +9,6 @@ import tempfile
 
 import numpy as np
 import pandas as pd
-import pgenlib
 from test_sharded_workflow import render_task
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -29,7 +28,13 @@ def read_result(path):
                        dtype={'phenotype_id': str, 'variant_id': str, 'group_id': str})
 
 
+def combine_results(paths):
+    frames = [read_result(path) for path in paths]
+    return pd.concat(frame for frame in frames if not frame.empty).sort_index()
+
+
 def main():
+    import pgenlib
     rng = np.random.default_rng(11)
     n = 96
     samples = [f'{i:06d}' for i in range(n)]
@@ -124,7 +129,7 @@ def main():
                                     cis_window=10, permutations=256, seed=17, gpu_count=0, cpu=1,
                                     dosages=dosages), ref)
             expected = read_result(ref/'reference.cis_qtl.txt.gz').sort_index()
-            observed = pd.concat([read_result(path) for path in results]).sort_index()
+            observed = combine_results(results)
             pd.testing.assert_frame_equal(observed, expected, rtol=2e-4, atol=1e-6)
             assert set(observed.index) == {'A', 'B', 'C', 'D', 'E'}
             merged = work/'merge'

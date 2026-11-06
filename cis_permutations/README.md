@@ -1,6 +1,11 @@
 # tensorQTL cis Permutations
 
-This repository contains WDL workflows for running **cis-QTL mapping with permutations** using [tensorQTL](https://github.com/broadinstitute/tensorqtl). Two workflows are provided:
+This directory contains WDL workflows for running **cis-QTL mapping with permutations** using [tensorQTL](https://github.com/broadinstitute/tensorqtl). The two original entry points are listed below.
+
+For paired phenotype and genotype shards, use the new
+[sharded cis permutation workflow](SHARDED.md). It extracts the full cis
+windows before the GPU scatter and calculates global Storey q-values after
+the merge. Shards can contain more than one chromosome.
 
 | Workflow | WDL file | Use case |
 |---|---|---|

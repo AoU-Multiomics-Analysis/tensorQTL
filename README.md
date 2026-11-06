@@ -3,6 +3,7 @@
 Terra WDL pipelines for nominal cis, cis permutation, and trans QTL mapping.
 
 <!-- workflow-badges:start -->
+[![Build and smoke test sharded cis image](https://github.com/AoU-Multiomics-Analysis/tensorQTL/actions/workflows/build-sharded-cis-image.yml/badge.svg)](https://github.com/AoU-Multiomics-Analysis/tensorQTL/actions/workflows/build-sharded-cis-image.yml)
 [![Update README workflow badges](https://github.com/AoU-Multiomics-Analysis/tensorQTL/actions/workflows/update-readme-badges.yml/badge.svg)](https://github.com/AoU-Multiomics-Analysis/tensorQTL/actions/workflows/update-readme-badges.yml)
 [![Validate nominal cis WDL](https://github.com/AoU-Multiomics-Analysis/tensorQTL/actions/workflows/validate-cis-nominal.yml/badge.svg)](https://github.com/AoU-Multiomics-Analysis/tensorQTL/actions/workflows/validate-cis-nominal.yml)
 [![Validate cis permutations WDL](https://github.com/AoU-Multiomics-Analysis/tensorQTL/actions/workflows/validate-cis-permutations.yml/badge.svg)](https://github.com/AoU-Multiomics-Analysis/tensorQTL/actions/workflows/validate-cis-permutations.yml)
@@ -16,9 +17,10 @@ Terra WDL pipelines for nominal cis, cis permutation, and trans QTL mapping.
 | Nominal cis | [cis_nominal/tensorqtl_cis_nominal.wdl](cis_nominal/tensorqtl_cis_nominal.wdl) | [Inputs and runtime](cis_nominal/README.md) |
 | Cis eQTL permutations | [cis_permutations/workflows/tensorqtl_cis_permutations.wdl](cis_permutations/workflows/tensorqtl_cis_permutations.wdl) | [Inputs and runtime](cis_permutations/README.md) |
 | Cis sQTL permutations | [cis_permutations/workflows/tensorqtl_cis_permutations_sQTL.wdl](cis_permutations/workflows/tensorqtl_cis_permutations_sQTL.wdl) | [Inputs and runtime](cis_permutations/README.md) |
+| Sharded cis permutations | [cis_permutations/workflows/tensorqtl_cis_permutations_sharded.wdl](cis_permutations/workflows/tensorqtl_cis_permutations_sharded.wdl) | [Shard design, inputs, and FDR](cis_permutations/SHARDED.md) |
 | Trans | [trans/tensorQTL_trans.wdl](trans/tensorQTL_trans.wdl) | [Inputs and runtime](trans/README.md) |
 
-All four entry points use WDL 1.0. The root `.dockstore.yml` defines their descriptor paths and names.
+All five entry points use WDL 1.0. The root `.dockstore.yml` defines their descriptor paths and names.
 Register this repository in Dockstore to import these workflows into Terra.
 Keep the sQTL descriptor and its imported eQTL descriptor in the same directory.
 
@@ -33,9 +35,14 @@ Its optional machine, GPU, and zone inputs can override those defaults.
 The root GitHub Actions workflows run each pipeline's checks from its own directory.
 They check WDL syntax, workflow-scope file writes, and simulated cloud-to-local file handling.
 The cis permutation and trans checks also use the Cromwell WDL parser.
-The nominal cis and trans checks run the existing tensorQTL CPU smoke tests in GitHub Actions.
-No local Docker build is needed. The pipelines use their existing container references.
-The source Docker build files are empty placeholders; their nested Actions files are inactive.
+All three pipeline checks include tensorQTL CPU smoke tests in GitHub Actions.
+The sharded cis smoke also uses real PLINK2 and R qvalue. It compares sharded
+and unsharded results, including fractional dosages.
+No local Docker build is needed. The original workflows keep their container references.
+The sharded workflow requires a published image from the new root image Actions
+workflow. Automatic image builds run only when the included analysis script
+changes. Dockerfile-only changes require a manual run. The original source
+Dockerfiles remain placeholders; their nested Actions files are inactive.
 
 For local command tests, use Python 3.11 with `miniwdl==1.14.2`, `numpy==1.26.4`,
 `pandas==2.2.3`, and `pyarrow==19.0.1`. Run each suite in a separate process:

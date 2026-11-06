@@ -24,6 +24,7 @@ jobs:
         run: |
           miniwdl check workflows/tensorqtl_cis_permutations.wdl
           miniwdl check workflows/tensorqtl_cis_permutations_sQTL.wdl
+          miniwdl check workflows/tensorqtl_cis_permutations_sharded.wdl
       - uses: actions/setup-java@v4
         with:
           distribution: temurin
@@ -35,4 +36,23 @@ jobs:
             --output "$RUNNER_TEMP/womtool-92.jar"
           java -jar "$RUNNER_TEMP/womtool-92.jar" validate workflows/tensorqtl_cis_permutations.wdl
           java -jar "$RUNNER_TEMP/womtool-92.jar" validate workflows/tensorqtl_cis_permutations_sQTL.wdl
+          java -jar "$RUNNER_TEMP/womtool-92.jar" validate workflows/tensorqtl_cis_permutations_sharded.wdl
       - run: python -m unittest discover -s tests
+      - uses: mamba-org/setup-micromamba@v2
+        with:
+          environment-name: sharded-smoke
+          create-args: >-
+            python=3.11.11 pip=25.0.1 plink2=2.00a5.12=h4ac6f70_0
+            numpy=1.26.4 pandas=2.2.3 scipy=1.14.1
+            r-base=4.3.3 bioconductor-qvalue=2.34.0 rpy2=3.5.11
+            -c conda-forge -c bioconda
+      - name: Install CPU tensorQTL smoke dependencies
+        shell: bash -el {0}
+        run: |
+          python -m pip install torch==2.5.1 --index-url https://download.pytorch.org/whl/cpu
+          python -m pip install numpy==1.26.4 pandas==2.2.3 scipy==1.14.1 tensorqtl==1.0.10 pgenlib==0.93.0 pandas-plink==2.3.2 qtl==0.1.10 miniwdl==1.14.2
+      - name: Compare real sharded and unsharded permutations and global q-values
+        shell: bash -el {0}
+        run: |
+          python -m unittest discover -s tests
+          python tests/smoke_sharded.py

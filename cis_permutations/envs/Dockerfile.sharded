@@ -1,0 +1,28 @@
+FROM mambaorg/micromamba:2.10.0
+
+USER root
+RUN mkdir -p /opt/tensorqtl && chown "$MAMBA_USER:$MAMBA_USER" /opt/tensorqtl
+USER $MAMBA_USER
+
+RUN micromamba install --yes --name base --channel conda-forge --channel bioconda \
+        python=3.11.11 pip=25.0.1 \
+        numpy=1.26.4 pandas=2.2.3 scipy=1.14.1 \
+        plink2=2.00a5.12=h4ac6f70_0 \
+        r-base=4.3.3 bioconductor-qvalue=2.34.0 rpy2=3.5.11 \
+    && micromamba clean --all --yes
+
+ARG MAMBA_DOCKERFILE_ACTIVATE=1
+RUN python -m pip install --no-cache-dir torch==2.5.1 --index-url https://download.pytorch.org/whl/cu124 \
+    && python -m pip install --no-cache-dir \
+        numpy==1.26.4 pandas==2.2.3 scipy==1.14.1 \
+        tensorqtl==1.0.10 pgenlib==0.93.0 pandas-plink==2.3.2 qtl==0.1.10 miniwdl==1.14.2 \
+    && python -c 'import tensorqtl, pgenlib, torch; from tensorqtl import core; assert core.has_rpy2; assert torch.version.cuda == "12.4"'
+
+COPY --chown=$MAMBA_USER:$MAMBA_USER cis_permutations/scripts/sharded_cis.py /opt/tensorqtl/sharded_cis.py
+
+# Terra can replace the image entry point. Keep executables visible in that case.
+USER root
+ENV PATH=/opt/conda/bin:$PATH
+ENV PYTHONUNBUFFERED=1
+WORKDIR /tmp
+CMD ["python3", "/opt/tensorqtl/sharded_cis.py", "--help"]

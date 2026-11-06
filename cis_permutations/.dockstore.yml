@@ -6,4 +6,7 @@ workflows:
   - subclass: WDL 
     primaryDescriptorPath: /workflows/tensorqtl_cis_permutations_sQTL.wdl
     name: tensorQTL_permutation_sQTL 
+  - subclass: WDL
+    primaryDescriptorPath: /workflows/tensorqtl_cis_permutations_sharded.wdl
+    name: tensorQTL_permutation_sharded
 

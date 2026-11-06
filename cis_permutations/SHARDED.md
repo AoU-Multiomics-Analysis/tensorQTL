@@ -1,13 +1,14 @@
-# Cis permutations with phenotype and genotype shards
+# Cis permutations with phenotype-count shards
 
 Use `workflows/tensorqtl_cis_permutations_sharded.wdl` on Terra managed
 Cromwell. The descriptor uses WDL 1.0. The existing workflows are unchanged.
-The complete workflow has not been tested on Terra.
+The complete workflow has not completed successfully on Terra.
 
 ## Task sequence
 
 1. One CPU task localizes the source PLINK2 files. It sorts phenotypes by
-   chromosome and position. It puts nearby phenotypes into the same shard.
+   chromosome and position. It puts nearby phenotypes into the same shard,
+   using `max_phenotypes_per_shard` as the only size target.
 2. The task extracts the union of the full cis windows for each shard. It
    retains both window boundaries. It excludes gaps between windows and
    samples that are absent from the phenotype file.
@@ -21,6 +22,11 @@ source several times during extraction. GPU tasks download only their shard.
 Overlapping windows can put the same variant in several shards. This is
 required to retain complete windows. The manifest records actual genotype
 bytes per shard; it does not promise a fixed reduction in total transfer.
+
+For ungrouped phenotypes, each full shard has the requested phenotype count.
+The final shard can be smaller. Groups stay complete, so a shard can also be
+smaller when the next group does not fit. A group larger than the target stays
+in one shard and is marked oversized. Variant counts do not limit shard size.
 
 ## Statistical method
 
@@ -56,14 +62,17 @@ arguments; they do not use JSON argument wrappers.
 | `docker_image` | Required | Published image digest or full commit tag |
 | `phenotype_groups` | Absent | Optional two-column TSV without a header; one phenotype ID and group ID per row |
 | `cis_window` | `1000000` | Nonnegative distance in bp on each side of the phenotype |
-| `max_phenotypes_per_shard` | `250` | Positive target; groups remain complete |
-| `max_variants_per_shard` | `100000` | Positive target for the union of cis variants |
+| `max_phenotypes_per_shard` | `250` | Only shard-size target; positive phenotype count; groups remain complete |
 | `permutations` | `10000` | Number of permutations, at least 10 |
 | `maf_threshold` | `0.0` | In-sample MAF filter; applied during mapping |
 | `seed` | `1` | Same seed in every shard |
 | `dosages` | `false` | Read PGEN dosage values when true; otherwise read hard calls |
 | `fdr` | `0.05` | Global q-value threshold |
 | `qvalue_lambda` | Absent | Optional R qvalue tuning parameter |
+
+The example sets `max_phenotypes_per_shard` to `5000`. The workflow default
+remains `250`. A target of `5000` allows a shard with more than 100000 cis
+variants. The task extracts all variants in its full cis windows.
 
 For BED interval `[start, end)`, extraction uses the one-based inclusive
 range `[max(1, start + 1 - cis_window), end + cis_window]`. This matches
@@ -85,9 +94,22 @@ variants are listed in `preparation_skipped`.
 
 When a groups file is supplied, it must cover exactly the phenotype IDs in
 the BED file. Members of a group stay in one shard. They must have the same
-cis variant range on the same chromosome, as required by tensorQTL. A single
-group or window can exceed a shard target. The task records that condition
-in the manifest; it does not remove variants to meet the target.
+cis variant range on the same chromosome, as required by tensorQTL. Only a
+group with more phenotypes than the target is marked oversized. The task
+retains the group and all variants in its full cis windows.
+
+## Update an existing Terra configuration
+
+1. Import the updated WDL descriptor into Terra.
+2. Remove `tensorqtl_cis_permutations_sharded.max_variants_per_shard` from
+   saved workflow inputs and input JSON files. The WDL no longer accepts it.
+3. Set `tensorqtl_cis_permutations_sharded.max_phenotypes_per_shard` to the
+   required count, such as `5000`.
+4. Set `docker_image` to a commit tag or digest built from this update.
+   The previously published image still uses the variant-count limit.
+
+Use the updated WDL and updated image together. For direct script calls,
+remove `--max-variants-per-shard`; keep `--max-phenotypes-per-shard`.
 
 ## Resources
 
@@ -95,7 +117,9 @@ The preparation defaults are 4 CPUs, 32 GB memory, and 500 GB disk. Set
 `prepare_disk_gb` for the source files, all extracted shards, and temporary
 files. Overlapping windows increase the required disk space. PLINK receives
 half the requested preparation memory; Python also needs memory for variant
-positions and phenotype values.
+positions and phenotype values. Preparation still loads the full phenotype
+matrix into memory before it creates shards. This change does not reduce
+that preparation memory requirement.
 
 GPU workers default to 16 CPUs, 64 GB memory, 100 GB disk, one NVIDIA L4, and
 `g2-standard-16` in `us-central1-c`. Use `map_cpu`, `map_memory_gb`,
@@ -114,7 +138,7 @@ retries. Use `preemptible=0` when retries are not wanted.
 |---|---|
 | `cis_qtl` | Combined cis summary, with global `qval` and tensorQTL significance thresholds when available |
 | `shard_results` | Raw permutation summaries without q-values |
-| `manifest` | Per-shard chromosomes, phenotype/test/variant counts, window size, bytes, and oversized status |
+| `manifest` | Per-shard chromosomes, phenotype/test/variant counts, window size, bytes, and oversized status for groups above the phenotype target |
 | `preparation_skipped` | Constant phenotypes and phenotypes without cis variants |
 | `mapping_skipped` | Phenotypes or group members without valid variants after MAF and monomorphic filters |
 | `preparation_log`, `shard_logs`, `merge_log` | Stage logs |
@@ -134,7 +158,9 @@ includes `scripts/sharded_cis.py`. The root image Actions workflow builds
 on changes to that script and provides a manual trigger. A Dockerfile-only
 change requires the manual trigger. Successful runs on `main` publish an
 image tagged with the full commit SHA. Set `docker_image` to that tested tag
-or its digest. The image has not been built or published during this task.
+or its digest. The original sharded-workflow checks passed on GitHub, and
+its image was built and published from `main`. That image predates this
+change; use an image built from the phenotype-count update.
 
 The root validation Actions workflow checks all three WDL descriptors with
 miniwdl and Cromwell's parser. It runs unit and command tests, then a real
@@ -143,8 +169,8 @@ and global q-values from sharded and unsharded inputs. It checks cis
 boundaries, extracted genotypes, sample IDs, groups, an empty shard, and
 mixed chromosome shards. It also checks fractional dosage retention and
 the dosage mapping path. The image workflow runs that smoke test in its
-candidate container before publication. These Actions checks have been
-configured; a local check does not prove that they passed on GitHub.
+candidate container before publication. Check the Actions results for the
+commit and image that you use. A local check does not prove an Actions result.
 
 Files remain typed `File` values through task inputs and output structs.
 The preparation JSON is an output manifest, not an argument wrapper.
@@ -162,4 +188,4 @@ python -m unittest discover -s tests
 ```
 
 Do not claim Terra validation until the complete workflow runs on Terra.
-No cloud job was submitted during this task.
+The complete sharded workflow has not completed successfully on Terra.

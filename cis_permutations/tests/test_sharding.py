@@ -46,32 +46,52 @@ class ShardingTests(unittest.TestCase):
                          [('chr1', 90, 111), ('chr1', 290, 310)])
         self.assertEqual(self.index.count(intervals), 5)
 
-    def test_variant_limit_splits_nearby_phenotypes_without_losing_windows(self):
+    def test_phenotype_count_sets_shard_boundaries_and_retains_full_windows(self):
         rows = [self.phenotype('chr1', 99, 100, 'A'),
                 self.phenotype('chr1', 109, 110, 'B'),
                 self.phenotype('chr1', 299, 300, 'C')]
-        shards = self.mod.plan_shards(rows, self.index, 10, 10, 3)
-        self.assertEqual([[p.name for p in s] for s in shards], [['A'], ['B'], ['C']])
-        self.assertEqual(self.mod.shard_intervals(shards[0], 10), [('chr1', 90, 110)])
+        shards = self.mod.plan_shards(rows, self.index, 10, 2)
+        self.assertEqual([[p.name for p in s] for s in shards], [['A', 'B'], ['C']])
+        self.assertEqual(self.mod.shard_intervals(shards[0], 10), [('chr1', 90, 120)])
+        self.assertEqual(self.index.count(self.mod.shard_intervals(shards[0], 10)), 4)
+
+    def test_5000_phenotypes_stay_together_with_more_than_100000_variants(self):
+        with self.pvar.open('w') as handle:
+            handle.write('#CHROM\tPOS\tID\tREF\tALT\n')
+            handle.writelines(f'1\t{p}\tv{p}\tA\tG\n' for p in range(1, 100002))
+        index = self.mod.VariantIndex(self.pvar)
+        rows = [self.phenotype('chr1', 99, 100, f'P{i:05d}') for i in range(5001)]
+        shards = self.mod.plan_shards(rows, index, 100000, 5000)
+        self.assertEqual([len(shard) for shard in shards], [5000, 1])
+        self.assertEqual(index.count(self.mod.shard_intervals(shards[0], 100000)), 100001)
+        self.assertEqual(len({p.name for shard in shards for p in shard}), 5001)
 
     def test_one_shard_can_contain_several_chromosomes(self):
         rows = [self.phenotype('chr2', 99, 100, 'B'),
                 self.phenotype('chr1', 99, 100, 'A')]
-        shards = self.mod.plan_shards(rows, self.index, 10, 10, 10)
+        shards = self.mod.plan_shards(rows, self.index, 10, 10)
         self.assertEqual([[p.name for p in s] for s in shards], [['A', 'B']])
 
     def test_group_is_indivisible_when_it_exceeds_a_target(self):
         rows = [self.phenotype('chr1', 99, 100, 'A', 'G'),
                 self.phenotype('chr1', 99, 100, 'B', 'G'),
                 self.phenotype('chr2', 99, 100, 'C', 'H')]
-        shards = self.mod.plan_shards(rows, self.index, 10, 1, 2)
+        shards = self.mod.plan_shards(rows, self.index, 10, 1)
         self.assertEqual([[p.name for p in s] for s in shards], [['A', 'B'], ['C']])
+
+    def test_shard_can_be_smaller_than_target_to_keep_next_group_together(self):
+        rows = [self.phenotype('chr1', 99, 100, 'A', 'G1'),
+                self.phenotype('chr1', 99, 100, 'B', 'G1'),
+                self.phenotype('chr1', 199, 200, 'C', 'G2'),
+                self.phenotype('chr1', 199, 200, 'D', 'G2')]
+        shards = self.mod.plan_shards(rows, self.index, 10, 3)
+        self.assertEqual([[p.name for p in s] for s in shards], [['A', 'B'], ['C', 'D']])
 
     def test_group_with_different_variant_ranges_is_rejected(self):
         rows = [self.phenotype('chr1', 99, 100, 'A', 'G'),
                 self.phenotype('chr1', 299, 300, 'B', 'G')]
         with self.assertRaisesRegex(ValueError, 'same cis variants'):
-            self.mod.plan_shards(rows, self.index, 10, 10, 10)
+            self.mod.plan_shards(rows, self.index, 10, 10)
 
     def test_ambiguous_chromosome_aliases_are_rejected(self):
         with self.pvar.open('a') as handle:
@@ -85,7 +105,13 @@ class ShardingTests(unittest.TestCase):
                 with self.assertRaises(ValueError):
                     self.mod.cis_interval(start, end, window)
         with self.assertRaises(ValueError):
-            self.mod.plan_shards([], self.index, 10, 0, 5)
+            self.mod.plan_shards([], self.index, 10, 0)
+
+    def test_prepare_cli_has_only_a_phenotype_size_target(self):
+        result = subprocess.run([sys.executable, str(SCRIPT), 'prepare', '--help'], capture_output=True, text=True)
+        self.assertEqual(result.returncode, 0, result.stderr)
+        self.assertIn('--max-phenotypes-per-shard', result.stdout)
+        self.assertNotIn('--max-variants-per-shard', result.stdout)
 
     def test_localization_errors_are_reported_before_open(self):
         for path in ['gs://bucket/file', 's3://bucket/file', str(self.root/'missing')]:

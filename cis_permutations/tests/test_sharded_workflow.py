@@ -52,6 +52,14 @@ class ShardedWorkflowTests(unittest.TestCase):
         types = {b.name: b.value.type for b in merge.available_inputs}
         self.assertIsInstance(types['results'].item_type, WDL.Type.File)
 
+    def test_workflow_and_preparation_inputs_have_only_a_phenotype_size_target(self):
+        doc = WDL.load(str(DESCRIPTOR))
+        self.assertIn('max_phenotypes_per_shard', doc.workflow.available_inputs)
+        self.assertNotIn('max_variants_per_shard', doc.workflow.available_inputs)
+        prepare = next(t for t in doc.tasks if t.name == 'prepare_cis')
+        self.assertIn('max_phenotypes_per_shard', prepare.available_inputs)
+        self.assertNotIn('max_variants_per_shard', prepare.available_inputs)
+
     def run_command(self, name, cloud_key=None, localize=True):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)

@@ -30,6 +30,19 @@ Other task inputs keep the prefix `tensorqtl_cis_permutations_workflow.tensorqtl
 The sQTL task now uses the eQTL task's L4 runtime defaults, input checks, safe quoting, and command logs.
 Its optional machine, GPU, and zone inputs can override those defaults.
 
+The sharded cis workflow sorts phenotypes by coordinate and uses only
+`max_phenotypes_per_shard` to set shard size. The default is `250`; the
+example uses `5000`. It keeps groups and full cis windows intact. The final
+shard and shards before a group boundary can be smaller than the target.
+A group above the target stays in one oversized shard. Variant counts remain
+in the manifest and do not limit shard size.
+
+For existing Terra configurations, remove `max_variants_per_shard` and use
+the updated WDL with an image built from this update. The previously
+published image still uses the variant-count limit. See the
+[migration steps](cis_permutations/SHARDED.md#update-an-existing-terra-configuration).
+Preparation still loads the full phenotype matrix into memory.
+
 ## Checks
 
 The root GitHub Actions workflows run each pipeline's checks from its own directory.
@@ -39,10 +52,13 @@ All three pipeline checks include tensorQTL CPU smoke tests in GitHub Actions.
 The sharded cis smoke also uses real PLINK2 and R qvalue. It compares sharded
 and unsharded results, including fractional dosages.
 No local Docker build is needed. The original workflows keep their container references.
-The sharded workflow requires a published image from the new root image Actions
+The sharded workflow requires a published image from the root image Actions
 workflow. Automatic image builds run only when the included analysis script
 changes. Dockerfile-only changes require a manual run. The original source
 Dockerfiles remain placeholders; their nested Actions files are inactive.
+The original sharded-workflow checks passed on GitHub, and its image was
+built and published from `main`. Use an image built from the phenotype-count
+update with the updated sharded WDL.
 
 For local command tests, use Python 3.11 with `miniwdl==1.14.2`, `numpy==1.26.4`,
 `pandas==2.2.3`, and `pyarrow==19.0.1`. Run each suite in a separate process:

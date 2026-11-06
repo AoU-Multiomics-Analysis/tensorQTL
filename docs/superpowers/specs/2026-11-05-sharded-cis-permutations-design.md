@@ -1,5 +1,10 @@
 # Sharded cis permutation workflow
 
+This document records the original design. Its variant-count limit is
+superseded by the [phenotype-count sharding plan](../plans/2026-11-06-phenotype-count-shards.md).
+The current workflow uses only the phenotype-count target. Variant counts
+remain in the manifest for audit.
+
 ## Intent and approved design
 
 Reduce genotype transfers to tensorQTL workers. Assign each phenotype to one

@@ -1,14 +1,5 @@
 version 1.0
 
-struct CisShard {
-    String shard_id
-    File plink_pgen
-    File plink_pvar
-    File plink_psam
-    File phenotype_bed
-    File phenotype_groups
-}
-
 workflow tensorqtl_cis_permutations_sharded {
     input {
         File plink_pgen
@@ -53,13 +44,19 @@ workflow tensorqtl_cis_permutations_sharded {
             cpu = prepare_cpu, memory_gb = prepare_memory_gb, disk_gb = prepare_disk_gb,
             zones = zones, preemptible = preemptible
     }
-    scatter (shard in prepare_cis.shards) {
+    # The five glob outputs use the same fixed-width shard names and Bash order.
+    # Consume the returned Files: Cromwell can put each glob in a separate directory.
+    scatter (shard_index in range(length(prepare_cis.plink_pgens))) {
         call map_cis {
             input:
-                plink_pgen = shard.plink_pgen, plink_pvar = shard.plink_pvar,
-                plink_psam = shard.plink_psam, phenotype_bed = shard.phenotype_bed,
-                phenotype_groups = shard.phenotype_groups, covariates = covariates,
-                prefix = shard.shard_id, docker_image = docker_image,
+                plink_pgen = prepare_cis.plink_pgens[shard_index],
+                plink_pvar = prepare_cis.plink_pvars[shard_index],
+                plink_psam = prepare_cis.plink_psams[shard_index],
+                phenotype_bed = prepare_cis.phenotype_beds[shard_index],
+                phenotype_groups = prepare_cis.phenotype_groups_files[shard_index],
+                covariates = covariates,
+                prefix = basename(prepare_cis.plink_pgens[shard_index], ".pgen"),
+                docker_image = docker_image,
                 cis_window = cis_window, permutations = permutations,
                 maf_threshold = maf_threshold, seed = seed, dosages = dosages,
                 cpu = map_cpu, memory_gb = map_memory_gb, disk_gb = map_disk_gb,
@@ -143,8 +140,13 @@ task prepare_cis {
         } 2>&1 | tee preparation.log
     >>>
     output {
-        # File fields in this task output struct are collected and localized by Cromwell.
-        Array[CisShard] shards = read_json("shards.json")
+        # Google Batch must discover the upload patterns before the command runs.
+        # Files named inside task-created JSON are not discoverable at that point.
+        Array[File] plink_pgens = glob("shards/*.pgen")
+        Array[File] plink_pvars = glob("shards/*.pvar")
+        Array[File] plink_psams = glob("shards/*.psam")
+        Array[File] phenotype_beds = glob("shards/*.phenotypes.bed.gz")
+        Array[File] phenotype_groups_files = glob("shards/*.groups.tsv")
         File manifest = "shards.manifest.tsv"
         File skipped = "preparation.skipped.tsv"
         File log = "preparation.log"

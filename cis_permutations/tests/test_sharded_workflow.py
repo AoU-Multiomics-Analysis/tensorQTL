@@ -45,9 +45,11 @@ class ShardedWorkflowTests(unittest.TestCase):
             for child in node.children:
                 visit(child)
         visit(doc.workflow)
-        struct = doc.struct_typedefs['CisShard'].members
-        for key in ['plink_pgen', 'plink_pvar', 'plink_psam', 'phenotype_bed', 'phenotype_groups']:
-            self.assertIsInstance(struct[key], WDL.Type.File)
+        prepare = next(t for t in doc.tasks if t.name == 'prepare_cis')
+        outputs = {d.name: d.type for d in prepare.outputs}
+        for key in ['plink_pgens', 'plink_pvars', 'plink_psams', 'phenotype_beds', 'phenotype_groups_files']:
+            self.assertIsInstance(outputs[key], WDL.Type.Array)
+            self.assertIsInstance(outputs[key].item_type, WDL.Type.File)
         merge = next(t for t in doc.tasks if t.name == 'merge_cis')
         types = {b.name: b.value.type for b in merge.available_inputs}
         self.assertIsInstance(types['results'].item_type, WDL.Type.File)

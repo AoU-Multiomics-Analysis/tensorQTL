@@ -135,9 +135,9 @@ def shard_intervals(rows, window):
     return merge_intervals((row.chrom, *cis_interval(row.start, row.end, window)) for row in rows)
 
 
-def plan_shards(rows, index, window, max_phenotypes, max_variants):
-    if window < 0 or max_phenotypes < 1 or max_variants < 1:
-        raise ValueError('Shard limits must be positive; cis_window must be nonnegative')
+def plan_shards(rows, index, window, max_phenotypes):
+    if window < 0 or max_phenotypes < 1:
+        raise ValueError('Phenotype target must be positive; cis_window must be nonnegative')
     units = OrderedDict()
     for row in sorted(rows, key=lambda p: (chrom_key(p.chrom), p.start, p.end, p.name)):
         # Tag the key so a phenotype ID cannot collide with a group ID.
@@ -148,9 +148,7 @@ def plan_shards(rows, index, window, max_phenotypes, max_variants):
         ranges = {(p.chrom, *index.bounds(p.chrom, *cis_interval(p.start, p.end, window))) for p in unit}
         if len(ranges) > 1:
             raise ValueError(f'Group {unit[0].group} must have the same cis variants for all members')
-        candidate = current + unit
-        if current and (len(candidate) > max_phenotypes or
-                        index.count(shard_intervals(candidate, window)) > max_variants):
+        if current and len(current) + len(unit) > max_phenotypes:
             shards.append(current)
             current = []
         current.extend(unit)
@@ -285,7 +283,7 @@ def prepare(args):
         raise ValueError(f'Genotypes have missing samples: {sorted(missing)[:5]}')
     validate_covariates(args.covariates, samples)
     write_skips('preparation.skipped.tsv', skipped)
-    shards = plan_shards(rows, index, args.cis_window, args.max_phenotypes_per_shard, args.max_variants_per_shard)
+    shards = plan_shards(rows, index, args.cis_window, args.max_phenotypes_per_shard)
     if not shards:
         raise ValueError('No valid phenotypes remain after preparation; see preparation.skipped.tsv')
     Path('shards').mkdir()
@@ -334,13 +332,13 @@ def prepare(args):
                       phenotype_groups=str(groups_file))
         outputs.append(record)
         genotype_bytes = sum(Path(record[k]).stat().st_size for k in ['plink_pgen', 'plink_pvar', 'plink_psam'])
-        oversized = len(shard) > args.max_phenotypes_per_shard or selected_index.total > args.max_variants_per_shard
+        oversized = len(shard) > args.max_phenotypes_per_shard
         audit.append((name, ','.join(dict.fromkeys(p.chrom for p in shard)), len(shard),
                       len({p.group if p.group is not None else p.name for p in shard}),
                       selected_index.total, len(intervals), len(samples), args.cis_window,
                       genotype_bytes, source_bytes, oversized))
         if oversized:
-            log(f'stage=prepare {name} exceeds a size target to retain a complete phenotype or group.')
+            log(f'stage=prepare {name} exceeds the phenotype target to retain a complete group.')
     # This is a task output manifest. Typed WDL struct fields collect each File.
     Path('shards.json').write_text(json.dumps(outputs, indent=2) + '\n')
     write_tsv('shards.manifest.tsv', ['shard_id', 'chromosomes', 'phenotypes', 'tests', 'variants',
@@ -370,7 +368,7 @@ def map_permutations(args):
     if set(samples) - set(genotype_samples):
         raise ValueError('Genotypes have missing phenotype samples')
     # Also enforce group compatibility if this task is called outside the workflow.
-    plan_shards(rows, index, args.cis_window, max(1, len(rows)), max(1, index.total))
+    plan_shards(rows, index, args.cis_window, max(1, len(rows)))
     import numpy as np
     import pandas as pd
     import pgenlib
@@ -505,7 +503,6 @@ def main():
         subparser.add_argument('--cis-window', type=int, default=1000000)
         subparser.add_argument('--threads', type=int, default=4)
     prep.add_argument('--max-phenotypes-per-shard', type=int, default=250)
-    prep.add_argument('--max-variants-per-shard', type=int, default=100000)
     prep.add_argument('--plink-memory-mb', type=int, default=16000)
     mapping.add_argument('--prefix', required=True)
     mapping.add_argument('--permutations', type=int, default=10000)

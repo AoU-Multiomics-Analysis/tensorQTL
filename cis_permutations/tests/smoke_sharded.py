@@ -86,7 +86,7 @@ def main():
             work = root/('dosages' if dosages else 'grouped' if grouped else 'ordinary')
             work.mkdir()
             prep = work/'prepare'
-            run_task('prepare_cis', dict(values, max_phenotypes_per_shard=1, max_variants_per_shard=3), prep)
+            run_task('prepare_cis', dict(values, max_phenotypes_per_shard=1), prep)
             shards = json.loads((prep/'shards.json').read_text())
             assert len(shards) == 6, shards
             first = shards[0]
@@ -119,7 +119,7 @@ def main():
                 results.append(str(result))
             # One large shard is the unsharded reference, with identical preparation filters.
             whole = work/'whole_prepare'
-            run_task('prepare_cis', dict(values, max_phenotypes_per_shard=100, max_variants_per_shard=100), whole)
+            run_task('prepare_cis', dict(values, max_phenotypes_per_shard=100), whole)
             ref_shards = json.loads((whole/'shards.json').read_text())
             assert len(ref_shards) == 1
             assert set(pd.read_csv(whole/ref_shards[0]['phenotype_bed'], sep='\t')['#chr']) == {'chr1', 'chr2'}

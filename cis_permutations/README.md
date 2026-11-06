@@ -5,7 +5,17 @@ This directory contains WDL workflows for running **cis-QTL mapping with permuta
 For paired phenotype and genotype shards, use the new
 [sharded cis permutation workflow](SHARDED.md). It extracts the full cis
 windows before the GPU scatter and calculates global Storey q-values after
-the merge. Shards can contain more than one chromosome.
+the merge. `max_phenotypes_per_shard` is its only shard-size target; the
+default is `250`. Shards can contain more than one chromosome. Groups stay
+complete, so some shards can be smaller or contain one oversized group.
+The final shard can be smaller. Variant counts are reported in the manifest
+and do not limit shard size.
+
+For an existing Terra configuration, remove the old
+`max_variants_per_shard` input. Use the updated WDL and an image built from
+the same update. The previously published image still uses the variant-count
+limit. See [migration steps](SHARDED.md#update-an-existing-terra-configuration).
+Preparation still loads the full phenotype matrix into memory.
 
 | Workflow | WDL file | Use case |
 |---|---|---|
@@ -131,7 +141,8 @@ This file ensures that multiple phenotypes belonging to the same gene share a si
 
 ## Scripts
 
-The `scripts/` directory is reserved for helper scripts used to prepare or post-process data for these workflows. Currently no scripts are included; contributions are welcome.
+The `scripts/sharded_cis.py` CLI prepares shards, runs permutations, and
+merges results for the sharded workflow. It is included in the sharded image.
 
 ---
 
@@ -210,20 +221,25 @@ Both WDL workflows are registered on Dockstore via `.dockstore.yml`:
 
 ## Validation
 
-The root GitHub Actions workflow validates both WDL files and runs command tests. Tests cover L4
+The root GitHub Actions workflow validates all three WDL files and runs command tests. Tests cover L4
 defaults, machine/GPU/zone overrides, T4 selection without a predefined machine,
 optional arguments, safe path quoting, and unresolved cloud URI rejection.
-An AST check rejects workflow-scope file-writing functions. These checks do
-not build or publish a Docker image.
+An AST check rejects workflow-scope file-writing functions. The sharded
+workflow also has a PLINK2/tensorQTL/R CPU smoke test. A separate root image
+workflow builds and tests its image, then publishes successful `main` builds.
+The original sharded-workflow checks and image publication passed on GitHub.
+Use an image built from the phenotype-count update for the new shard target.
 
 Local checks:
 
 ```bash
 miniwdl check workflows/tensorqtl_cis_permutations.wdl
 miniwdl check workflows/tensorqtl_cis_permutations_sQTL.wdl
+miniwdl check workflows/tensorqtl_cis_permutations_sharded.wdl
 python -m unittest discover -s tests
 ```
 
-Command tests use a tensorQTL test double. They do not validate the tensorQTL
-engine, the production container, GPU execution, or Terra localization.
-The complete workflow has not been tested on Terra.
+Command tests use a tensorQTL test double. The sharded CPU smoke test uses
+real tools and compares sharded and unsharded results. These checks do not
+confirm GPU execution or Terra localization. The complete sharded workflow
+has not completed successfully on Terra.

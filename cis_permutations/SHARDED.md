@@ -155,8 +155,8 @@ The task-local `shards.json` is audit metadata only. It does not declare
 shard files for transfer.
 
 Files remain typed `File` values through task inputs. Merge receives an
-explicit `Array[File]`; its newline list is created at command rendering,
-after localization. A static AST check rejects file writes at workflow
+explicit `Array[File]`; its command writes the localized paths to a local
+newline list. A static AST check rejects file writes at workflow
 scope. Command tests simulate cloud-to-local path rewriting for every new
 task, but do not prove Terra localization or GPU execution.
 
@@ -194,3 +194,34 @@ python -m unittest discover -s tests
 
 Do not claim Terra validation until the complete workflow runs on Terra.
 No cloud job was submitted during this task.
+
+## Terra merge file-list error
+
+The merge task can fail with this error when it uses an earlier WDL:
+
+```text
+script: line 43: gs://.../call-merge_cis/write_lines_HASH.tmp: No such file or directory
+```
+
+The earlier command used `sub(write_lines(results), ...)` for the result
+list path. `write_lines()` returns a `File`, but `sub()` returns a `String`.
+The command then used the resulting cloud URI as a local filename. Bash
+cannot open that URI. See the [Cromwell `sub()` implementation](https://github.com/broadinstitute/cromwell/blob/92/wdl/transforms/new-base/src/main/scala/wdl/transforms/base/linking/expression/values/EngineFunctionEvaluators.scala#L804-L820).
+
+The corrected task keeps `results` as `Array[File]` until command rendering.
+The command writes those localized paths to `shard_results.list` with a
+quoted heredoc. It rejects an empty array, unresolved cloud URIs, and files
+that it cannot read before it starts the merge script.
+
+Refresh the workflow in Dockstore and Terra, then submit it again with the
+corrected WDL. Use the same Docker image; this change does not require an
+image rebuild. Keep call caching enabled for this merge error. Terra can
+reuse successful preparation and mapping calls when matching cache entries
+and their output files are available. Cache reuse is not guaranteed. The
+earlier output-transfer error requires the separate preparation steps above.
+
+Command tests simulate cloud-to-local path changes. The existing CPU smoke
+test checks the merge with PLINK2, tensorQTL, and R. These checks do not prove
+Terra localization. The complete corrected workflow has not been tested on
+Terra. No local Docker image was built, and no cloud job was submitted for
+this correction.

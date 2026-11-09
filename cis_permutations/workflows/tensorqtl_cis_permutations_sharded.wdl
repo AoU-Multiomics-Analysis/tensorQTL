@@ -249,8 +249,17 @@ task merge_cis {
         set -euo pipefail
         {
         log() { echo "[$(date -u +%FT%TZ)] stage=merge $*" >&2; }
-        # This task-local list is rendered after File localization.
-        results_list='~{sub(write_lines(results), "'", "'\"'\"'")}'
+        if [[ ~{length(results)} -eq 0 ]]; then
+            log "Input error: no shard result files were supplied."
+            exit 1
+        fi
+        # Keep the File array typed until interpolation. A quoted heredoc
+        # writes the localized paths without expanding shell characters.
+        log "Create local list for ~{length(results)} shard result files."
+        results_list='shard_results.list'
+        cat > "$results_list" <<'TENSORQTL_LOCALIZED_RESULTS'
+        ~{sep="\n" results}
+        TENSORQTL_LOCALIZED_RESULTS
         while IFS= read -r path; do
             case "$path" in *://*) log "Input localization error: unresolved URI $path"; exit 1;; esac
             [[ -r "$path" ]] || { log "Input localization error: unreadable file $path"; exit 1; }

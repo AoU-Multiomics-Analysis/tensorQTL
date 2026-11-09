@@ -20,12 +20,19 @@ class CommandStdLib(WDL.StdLib.Base):
         return filename
 
 
-def render_task(name, inputs, write_dir, local_paths=None):
+class CloudCommandStdLib(CommandStdLib):
+    """Model the cloud names Cromwell assigns to command-created files."""
+    def _virtualize_filename(self, filename):
+        return 'gs://cromwell-outputs/call-merge_cis/' + Path(filename).name
+
+
+def render_task(name, inputs, write_dir, local_paths=None, cloud_command_files=False):
     task = next(t for t in WDL.load(str(DESCRIPTOR)).tasks if t.name == name)
     values = WDL.values_from_json(inputs, task.available_inputs)
     if local_paths:
         values = WDL.Value.rewrite_env_paths(values, lambda value: local_paths.get(value.value, value.value))
-    stdlib = CommandStdLib(task.effective_wdl_version, write_dir=str(write_dir))
+    stdlib_class = CloudCommandStdLib if cloud_command_files else CommandStdLib
+    stdlib = stdlib_class(task.effective_wdl_version, write_dir=str(write_dir))
     for decl in task.inputs:
         if decl.name not in {b.name for b in values}:
             values = values.bind(decl.name, decl.expr.eval(values, stdlib) if decl.expr else WDL.Value.Null())
@@ -54,7 +61,7 @@ class ShardedWorkflowTests(unittest.TestCase):
         types = {b.name: b.value.type for b in merge.available_inputs}
         self.assertIsInstance(types['results'].item_type, WDL.Type.File)
 
-    def run_command(self, name, cloud_key=None, localize=True):
+    def run_command(self, name, cloud_key=None, localize=True, cloud_command_files=False, result_count=1):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write_dir = root/'command-files'
@@ -64,17 +71,21 @@ class ShardedWorkflowTests(unittest.TestCase):
             files = (['plink_pgen', 'plink_pvar', 'plink_psam', 'phenotype_bed', 'covariates', 'phenotype_groups']
                      if name != 'merge_cis' else ['results'])
             for key in files:
-                folder = root/(key + " space '$literal $(touch injected)")
-                folder.mkdir()
-                path = folder/'input'
-                path.write_text('data\n')
-                uri = 'gs://bucket/' + key
-                mapping[uri] = str(path)
-                value = uri if localize or cloud_key == key else str(path)
-                values[key] = [value] if key == 'results' else value
+                entries = []
+                for index in range(result_count if key == 'results' else 1):
+                    label = key + (f'_{index}' if index else '')
+                    folder = root/(label + " space '\"$literal $(touch injected) `touch injected_backtick`")
+                    folder.mkdir()
+                    path = folder/'input'
+                    path.write_text('data\n')
+                    uri = 'gs://bucket/' + label
+                    mapping[uri] = str(path)
+                    entries.append(uri if localize or cloud_key == key else str(path))
+                values[key] = entries if key == 'results' else entries[0]
             if name != 'prepare_cis':
                 values['prefix'] = 'test'
-            command = render_task(name, values, write_dir, mapping if localize else None)
+            command = render_task(name, values, write_dir, mapping if localize else None,
+                                  cloud_command_files=cloud_command_files)
             # The image includes this script. Substitute only its installed location.
             probe = root/'probe.py'
             probe.write_text('import json,pathlib,sys\npathlib.Path("argv.json").write_text(json.dumps(sys.argv[1:]))\n')
@@ -82,10 +93,27 @@ class ShardedWorkflowTests(unittest.TestCase):
             process = subprocess.run(['bash', '-c', command], cwd=root, text=True, capture_output=True)
             args = json.loads((root/'argv.json').read_text()) if (root/'argv.json').exists() else None
             self.assertFalse((root/'injected').exists())
+            self.assertFalse((root/'injected_backtick').exists())
             list_text = None
             if args and '--results-list' in args:
-                list_text = Path(args[args.index('--results-list')+1]).read_text()
+                list_text = (root / args[args.index('--results-list')+1]).read_text()
             return process, args, mapping, list_text
+
+    def test_merge_list_stays_local_when_generated_files_have_cloud_names(self):
+        for count in [1, 3]:
+            with self.subTest(count=count):
+                process, args, mapping, list_text = self.run_command(
+                    'merge_cis', cloud_command_files=True, result_count=count)
+                self.assertEqual(process.returncode, 0, process.stderr)
+                self.assertEqual(list_text, ''.join(path + '\n' for path in mapping.values()))
+                self.assertNotIn('gs://', list_text)
+                self.assertFalse(any('gs://' in arg for arg in args))
+
+    def test_merge_rejects_an_empty_result_array_before_running_the_script(self):
+        process, args, _, _ = self.run_command('merge_cis', cloud_command_files=True, result_count=0)
+        self.assertNotEqual(process.returncode, 0)
+        self.assertIsNone(args)
+        self.assertRegex((process.stdout + process.stderr).lower(), 'no.*result')
 
     def test_cloud_files_localize_in_every_task(self):
         for task in ['prepare_cis', 'map_cis', 'merge_cis']:

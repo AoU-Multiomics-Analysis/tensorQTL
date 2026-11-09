@@ -8,6 +8,7 @@ import csv
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import gzip
+from itertools import islice
 import json
 import math
 import os
@@ -94,7 +95,7 @@ def pvar_rows(path):
 
 
 class VariantIndex:
-    def __init__(self, path):
+    def __init__(self, path, allow_empty=False):
         self.positions = {}
         self.labels = {}
         self.total = 0
@@ -109,7 +110,7 @@ class VariantIndex:
                 raise ValueError(f'PVAR positions must be sorted within {label}')
             positions.append(position)
             self.total += 1
-        if not self.total:
+        if not self.total and not allow_empty:
             raise ValueError('PVAR contains no variants')
 
     def bounds(self, chrom, start, end):
@@ -274,6 +275,96 @@ def write_skips(path, rows):
     write_tsv(path, ['phenotype_id', 'group_id', 'reason'], rows)
 
 
+def variant_qc_metrics(genotypes, min_mac, max_missing_fraction):
+    """Count observed 0--2 values before imputation, using the mapper's encoding."""
+    import numpy as np
+    observed = genotypes != -9
+    if not np.isfinite(genotypes).all() or ((genotypes[observed] < 0) | (genotypes[observed] > 2)).any():
+        raise ValueError('Invalid genotype values: require 0--2 or missing code -9')
+    called = observed.sum(axis=1)
+    allele_sum = np.where(observed, genotypes, 0).sum(axis=1, dtype=np.float64)
+    mac = np.minimum(allele_sum, 2 * called - allele_sum)
+    # Divide the missing count directly to retain equality at cutoffs such as 1/20.
+    missing_fraction = (genotypes.shape[1] - called) / genotypes.shape[1]
+    keep = (called > 0) & (mac >= min_mac) & (missing_fraction <= max_missing_fraction)
+    return mac, missing_fraction, keep
+
+
+def filter_variants(args, samples, source_index, rows):
+    """Stream candidate genotypes; write QC metadata without copying the PGEN."""
+    import numpy as np
+    import pgenlib
+    genotype_samples = sample_ids(args.plink_psam)
+    sample_lookup = {name: i for i, name in enumerate(genotype_samples)}
+    subset = np.array(sorted(sample_lookup[name] for name in samples), dtype=np.uint32)
+    intervals = {}
+    for chrom, start, end in shard_intervals(rows, args.cis_window):
+        starts, ends = intervals.setdefault(chrom, ([], []))
+        starts.append(start)
+        ends.append(end)
+
+    def in_window(fields):
+        starts, ends = intervals.get(chromosome(fields[0]), ([], []))
+        position = int(fields[1])
+        i = bisect_right(starts, position) - 1
+        return i >= 0 and position <= ends[i]
+
+    counts = dict(source_variants=source_index.total, candidate_variants=0, outside_cis_windows=0,
+                  retained_variants=0, low_mac=0, high_missing=0, both_filters=0, no_observed_calls=0)
+    mode = 'dosages' if args.dosages else 'hard_calls'
+    log(f'stage=prepare Start variant QC: samples={len(samples)} mode={mode} '
+        f'min_mac={args.min_mac} max_missing_fraction={args.max_missing_fraction}; before imputation.')
+    seen_ids = set()
+    with pgenlib.PgenReader(os.fsencode(local_file(args.plink_pgen)), sample_subset=subset) as reader, \
+            Path('qc.pvar').open('w') as pvar, Path('qc.snplist').open('w') as retained:
+        if reader.get_variant_ct() != source_index.total or reader.get_raw_sample_ct() != len(genotype_samples):
+            raise ValueError('PGEN, PVAR, and PSAM dimensions do not match')
+        writer = csv.writer(pvar, delimiter='\t', lineterminator='\n')
+        writer.writerow(['#CHROM', 'POS', 'ID', 'REF', 'ALT'])
+        source_rows = iter(pvar_rows(args.plink_pvar))
+        for offset in range(0, source_index.total, 256):
+            block = list(islice(source_rows, 256))
+            candidates = np.array([in_window(fields) for fields in block], dtype=bool)
+            counts['outside_cis_windows'] += int((~candidates).sum())
+            if not candidates.any():
+                continue
+            selected = [fields for fields, candidate in zip(block, candidates) if candidate]
+            for fields in selected:
+                if fields[2] in seen_ids:
+                    raise ValueError(f'Duplicate selected variant IDs: {fields[2]}')
+                seen_ids.add(fields[2])
+                if ',' in fields[4]:
+                    raise ValueError('Selected multiallelic variants must be split before tensorQTL mapping')
+            matrix = np.empty((len(block), len(subset)), dtype=np.float32 if args.dosages else np.int8)
+            if args.dosages:
+                reader.read_dosages_range(offset, offset + len(block), matrix)
+            else:
+                reader.read_range(offset, offset + len(block), matrix)
+            matrix = matrix[candidates]
+            mac, missing_fraction, keep = variant_qc_metrics(matrix, args.min_mac, args.max_missing_fraction)
+            low_mac = mac < args.min_mac
+            high_missing = missing_fraction > args.max_missing_fraction
+            counts['candidate_variants'] += len(selected)
+            counts['retained_variants'] += int(keep.sum())
+            counts['low_mac'] += int(low_mac.sum())
+            counts['high_missing'] += int(high_missing.sum())
+            counts['both_filters'] += int((low_mac & high_missing).sum())
+            counts['no_observed_calls'] += int((matrix == -9).all(axis=1).sum())
+            for fields, passed in zip(selected, keep):
+                if passed:
+                    writer.writerow(fields[:5])
+                    retained.write(fields[2] + '\n')
+            if offset and offset % 65536 == 0:
+                log(f'stage=prepare Variant QC scanned {offset + len(block)}/{source_index.total} source variants.')
+    summary = dict(counts, samples=len(samples), min_mac=args.min_mac,
+                   max_missing_fraction=args.max_missing_fraction, genotype_mode=mode)
+    write_tsv('variant_qc.tsv', list(summary), [list(summary.values())])
+    log(f'stage=prepare Variant QC retained {counts["retained_variants"]}/{counts["candidate_variants"]} '
+        f'cis variants; low_mac={counts["low_mac"]} high_missing={counts["high_missing"]} '
+        f'both_filters={counts["both_filters"]} no_observed_calls={counts["no_observed_calls"]}.')
+    return VariantIndex('qc.pvar', allow_empty=True)
+
+
 def prepare(args):
     log('stage=prepare Validate localized source files and samples.')
     for value in [args.plink_pgen, args.plink_pvar, args.plink_psam, args.phenotype_bed, args.covariates]:
@@ -284,10 +375,21 @@ def prepare(args):
     if missing:
         raise ValueError(f'Genotypes have missing samples: {sorted(missing)[:5]}')
     validate_covariates(args.covariates, samples)
+    if not rows:
+        write_skips('preparation.skipped.tsv', skipped)
+        raise ValueError('No valid phenotypes remain after preparation; see preparation.skipped.tsv')
+    index = filter_variants(args, samples, index, rows)
+    retained_rows = []
+    for row in rows:
+        if index.count([(row.chrom, *cis_interval(row.start, row.end, args.cis_window))]):
+            retained_rows.append(row)
+        else:
+            skipped.append((row.name, row.group or '', 'no_cis_variants_after_qc'))
+    rows = retained_rows
     write_skips('preparation.skipped.tsv', skipped)
     shards = plan_shards(rows, index, args.cis_window, args.max_phenotypes_per_shard, args.max_variants_per_shard)
     if not shards:
-        raise ValueError('No valid phenotypes remain after preparation; see preparation.skipped.tsv')
+        raise ValueError('No valid phenotypes remain after variant QC; see variant_qc.tsv and preparation.skipped.tsv')
     Path('shards').mkdir()
     write_keep_file(args.plink_psam, samples, 'samples.keep.tsv')
     outputs, audit = [], []
@@ -302,7 +404,8 @@ def prepare(args):
         log(f'stage=prepare Extract {name}: phenotypes={len(shard)} variants={index.count(intervals)}.')
         subprocess.run(['plink2', '--pgen', str(local_file(args.plink_pgen)),
                         '--pvar', str(local_file(args.plink_pvar)), '--psam', str(local_file(args.plink_psam)),
-                        '--extract', 'bed1', str(ranges), '--keep', 'samples.keep.tsv',
+                        '--extract', 'bed1', str(ranges), '--extract-intersect', 'qc.snplist',
+                        '--force-intersect', '--keep', 'samples.keep.tsv',
                         '--allow-extra-chr', '--output-chr', 'chrM', '--make-pgen',
                         '--threads', str(args.threads), '--memory', str(args.plink_memory_mb),
                         '--out', str(stem)], check=True)
@@ -507,6 +610,9 @@ def main():
     prep.add_argument('--max-phenotypes-per-shard', type=int, default=250)
     prep.add_argument('--max-variants-per-shard', type=int, default=100000)
     prep.add_argument('--plink-memory-mb', type=int, default=16000)
+    prep.add_argument('--min-mac', type=int, default=10)
+    prep.add_argument('--max-missing-fraction', type=float, default=0.05)
+    prep.add_argument('--dosages', action='store_true')
     mapping.add_argument('--prefix', required=True)
     mapping.add_argument('--permutations', type=int, default=10000)
     mapping.add_argument('--maf-threshold', type=float, default=0)
@@ -522,6 +628,8 @@ def main():
         parser.error('prefix must be a filename prefix using letters, digits, dots, underscores, or hyphens')
     if hasattr(args, 'threads') and (args.threads < 1 or args.cis_window < 0):
         parser.error('threads must be positive and cis-window must be nonnegative')
+    if args.command == 'prepare' and (args.min_mac < 0 or not 0 <= args.max_missing_fraction <= 1):
+        parser.error('Require min-mac >= 0 and 0 <= max-missing-fraction <= 1')
     if args.command == 'map' and (args.permutations < 10 or not 0 <= args.maf_threshold < 0.5 or not 0 <= args.seed < 2**32):
         parser.error('permutations must be >= 10, 0 <= maf-threshold < 0.5, and 0 <= seed < 2^32')
     if args.command == 'merge' and (not 0 < args.fdr < 1 or

@@ -156,6 +156,62 @@ class ShardingTests(unittest.TestCase):
         self.assertIn('--permutations', result.stdout)
         self.assertNotIn('--config', result.stdout)
 
+    def test_prepare_cli_exposes_qc_and_rejects_invalid_cutoffs(self):
+        result = subprocess.run([sys.executable, str(SCRIPT), 'prepare', '--help'], capture_output=True, text=True)
+        self.assertIn('--min-mac', result.stdout)
+        self.assertIn('--max-missing-fraction', result.stdout)
+        self.assertIn('--dosages', result.stdout)
+        base = [sys.executable, str(SCRIPT), 'prepare']
+        for key in ['plink-pgen', 'plink-pvar', 'plink-psam', 'phenotype-bed', 'covariates']:
+            base.extend(['--'+key, 'unused'])
+        for option, value in [('--min-mac', '-1'), ('--max-missing-fraction', '-0.1'),
+                              ('--max-missing-fraction', '1.1'), ('--max-missing-fraction', 'nan'),
+                              ('--max-missing-fraction', 'inf')]:
+            with self.subTest(option=option, value=value):
+                process = subprocess.run([*base, option, value], capture_output=True, text=True)
+                self.assertEqual(process.returncode, 2, process.stderr)
+                self.assertIn('min-mac', process.stderr)
+
+    @unittest.skipUnless(importlib.util.find_spec('numpy'), 'numpy is required for genotype QC checks')
+    def test_variant_qc_uses_observed_minor_counts_and_inclusive_boundaries(self):
+        import numpy as np
+        self.assertTrue(hasattr(self.mod, 'variant_qc_metrics'), 'Pre-imputation variant QC is missing')
+        # MAC=10 and missing fraction=1/20 pass at equality. MAC=9 or 2/20 missing fail.
+        matrix = np.array([[1]*10 + [0]*9 + [-9],
+                           [1]*9 + [0]*10 + [-9],
+                           [1]*10 + [0]*8 + [-9]*2,
+                           [2]*15 + [1]*5,
+                           [-9]*20], dtype=np.int8)
+        mac, missing, keep = self.mod.variant_qc_metrics(matrix, 10, 0.05)
+        np.testing.assert_array_equal(mac, [10, 9, 10, 5, 0])
+        np.testing.assert_allclose(missing, [0.05, 0.05, 0.1, 0, 1])
+        np.testing.assert_array_equal(keep, [True, False, False, False, False])
+        # Even permissive cutoffs cannot retain a variant with no observations.
+        self.assertFalse(self.mod.variant_qc_metrics(matrix[-1:], 0, 1)[2][0])
+
+    @unittest.skipUnless(importlib.util.find_spec('numpy'), 'numpy is required for genotype QC checks')
+    def test_variant_qc_does_not_count_mean_imputed_alleles(self):
+        import numpy as np
+        self.assertTrue(hasattr(self.mod, 'variant_qc_metrics'), 'Pre-imputation variant QC is missing')
+        matrix = np.array([[0, 0, 1, 1, -9, -9, -9, -9]], dtype=np.float32)
+        mac, missing, keep = self.mod.variant_qc_metrics(matrix, 3, 1)
+        self.assertEqual(mac[0], 2)
+        self.assertEqual(missing[0], 0.5)
+        self.assertFalse(keep[0])
+        np.testing.assert_array_equal(matrix, [[0, 0, 1, 1, -9, -9, -9, -9]])
+
+    @unittest.skipUnless(importlib.util.find_spec('numpy'), 'numpy is required for genotype QC checks')
+    def test_variant_qc_counts_fractional_dosages_without_rounding(self):
+        import numpy as np
+        self.assertTrue(hasattr(self.mod, 'variant_qc_metrics'), 'Pre-imputation variant QC is missing')
+        matrix = np.array([[0.25]*20, [0.25]*19 + [0.125]], dtype=np.float32)
+        mac, _, keep = self.mod.variant_qc_metrics(matrix, 5, 0)
+        np.testing.assert_array_equal(mac, [5, 4.875])
+        np.testing.assert_array_equal(keep, [True, False])
+        for bad in [float('nan'), float('inf'), -1, 3]:
+            with self.subTest(bad=bad), self.assertRaisesRegex(ValueError, 'genotype'):
+                self.mod.variant_qc_metrics(np.array([[bad]], dtype=np.float32), 0, 1)
+
     @unittest.skipUnless(importlib.util.find_spec('pandas'), 'pandas is required for merge IO checks')
     def test_merge_retains_ids_that_match_pandas_na_tokens(self):
         path = self.root/'raw.tsv'

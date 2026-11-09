@@ -6,18 +6,21 @@ The complete workflow has not been tested on Terra.
 
 ## Task sequence
 
-1. One CPU task localizes the source PLINK2 files. It sorts phenotypes by
-   chromosome and position. It puts nearby phenotypes into the same shard.
-2. The task extracts the union of the full cis windows for each shard. It
-   retains both window boundaries. It excludes gaps between windows and
-   samples that are absent from the phenotype file.
+1. One CPU task localizes the source PLINK2 files. It checks variant MAC and
+   missingness for the phenotype samples, before genotype imputation. It
+   removes variants that fail these limits, then sorts phenotypes by
+   chromosome and position and puts nearby phenotypes into the same shard.
+2. The task extracts the QC-passing variants in the union of the full cis
+   windows for each shard. It retains both window boundaries. It excludes
+   gaps between windows and samples that are absent from the phenotype file.
 3. GPU tasks run cis permutations on the smaller PLINK and phenotype files.
    Each phenotype occurs in one shard. A shard can contain several chromosomes.
 4. One CPU task combines the raw permutation results and calculates global
    Storey q-values with tensorQTL and R `qvalue`.
 
-The preparation task downloads the source once. PLINK can read the localized
-source several times during extraction. GPU tasks download only their shard.
+The preparation task downloads the source once. It reads PGEN in bounded
+batches for QC. PLINK can read the localized source several times during
+extraction. GPU tasks download only their shard.
 Overlapping windows can put the same variant in several shards. This is
 required to retain complete windows. The manifest records actual genotype
 bytes per shard; it does not promise a fixed reduction in total transfer.
@@ -58,10 +61,12 @@ arguments; they do not use JSON argument wrappers.
 | `cis_window` | `1000000` | Nonnegative distance in bp on each side of the phenotype |
 | `max_phenotypes_per_shard` | `250` | Positive target; groups remain complete |
 | `max_variants_per_shard` | `100000` | Positive target for the union of cis variants |
+| `min_mac` | `10` | Nonnegative integer; minimum observed diploid-coded MAC before sharding and imputation |
+| `max_missing_fraction` | `0.05` | Maximum missing fraction before sharding and imputation; between 0 and 1 |
 | `permutations` | `10000` | Number of permutations, at least 10 |
 | `maf_threshold` | `0.0` | In-sample MAF filter; applied during mapping |
 | `seed` | `1` | Same seed in every shard |
-| `dosages` | `false` | Read PGEN dosage values when true; otherwise read hard calls |
+| `dosages` | `false` | Use PGEN dosages for preparation QC and mapping when true; otherwise use hard calls |
 | `fdr` | `0.05` | Global q-value threshold |
 | `qvalue_lambda` | Absent | Optional R qvalue tuning parameter |
 
@@ -81,13 +86,60 @@ whitespace. Sample IDs, including leading zeros, are read as text.
 All phenotype samples must occur in both the PSAM and covariates. The mapper
 aligns covariates by sample ID. Missing or nonfinite phenotype and covariate
 values cause an error. Constant phenotypes and phenotypes without cis
-variants are listed in `preparation_skipped`.
+variants, including windows emptied by QC, are listed in `preparation_skipped`.
 
 When a groups file is supplied, it must cover exactly the phenotype IDs in
 the BED file. Members of a group stay in one shard. They must have the same
-cis variant range on the same chromosome, as required by tensorQTL. A single
+QC-passing cis variant range on the same chromosome, as required by tensorQTL. A single
 group or window can exceed a shard target. The task records that condition
 in the manifest; it does not remove variants to meet the target.
+
+## Variant QC before sharding
+
+Preparation checks candidate variants in the union of the valid phenotype
+cis windows. It uses only samples present in the phenotype BED, including
+nonfounders. Samples outside that set cannot affect the filters. Variants
+outside the candidate windows do not need genotype QC.
+
+For each candidate, let `n` be the number of observed genotype values and
+`a` their sum. The observed MAC is `min(a, 2*n - a)`. The missing fraction is
+the number of missing values divided by the total number of phenotype
+samples. Missing values are excluded from the allele sum. The calculation
+occurs before mean imputation. It does not use the MAC reported after
+imputation in the mapping result.
+
+The default limits retain variants with MAC at least 10 and missing
+fraction at most 0.05. Equality passes both limits. A variant without
+observed values is always removed. Set `min_mac=0` and
+`max_missing_fraction=1.0` to remove the two numeric limits; variants without
+observed values are still removed.
+
+The `dosages` input controls QC and mapping together. With `false`, both
+use PGEN hard calls. With `true`, both use dosage values, so MAC can be
+fractional. A dosage can be present when its hard call is missing. Thus,
+the two modes can retain different variants from the same PGEN file.
+These calculations use the mapper's diploid 0–2 coding on all chromosomes.
+They do not apply sex-specific or native haploid allele counts.
+
+Preparation writes `qc.pvar` for the position index and `qc.snplist` for
+variant selection within the task. These files are internal. It plans
+shards from the filtered index. PLINK extracts from the original genotype
+triplet with the intersection of each shard's complete cis windows and
+the retained ID list. This adds no full genotype copy. The existing
+mapping-time `maf_threshold` remains a separate filter.
+
+The `variant_qc` output is a one-row TSV report. `source_variants` counts
+all source PVAR records. `candidate_variants` counts records in the valid
+phenotype windows, and `outside_cis_windows` counts the remaining records.
+`retained_variants`, `low_mac`, `high_missing`, `both_filters`, and
+`no_observed_calls` count candidate variants only. Failure counts can
+overlap; `both_filters` counts variants that fail both numeric limits.
+The report also records `samples`, `min_mac`, `max_missing_fraction`, and
+`genotype_mode`.
+
+Phenotypes with no surviving cis variants are listed in
+`preparation_skipped`. Preparation fails before the scatter if no valid
+phenotypes remain. Manifest variant counts refer to QC-passing variants.
 
 ## Resources
 
@@ -115,7 +167,8 @@ retries. Use `preemptible=0` when retries are not wanted.
 | `cis_qtl` | Combined cis summary, with global `qval` and tensorQTL significance thresholds when available |
 | `shard_results` | Raw permutation summaries without q-values |
 | `manifest` | Per-shard chromosomes, phenotype/test/variant counts, window size, bytes, and oversized status |
-| `preparation_skipped` | Constant phenotypes and phenotypes without cis variants |
+| `variant_qc` | One-row `variant_qc.tsv` with source, candidate, retained, and filter-failure counts, sample count, limits, and genotype mode |
+| `preparation_skipped` | Constant phenotypes and phenotypes without cis variants before or after QC |
 | `mapping_skipped` | Phenotypes or group members without valid variants after MAF and monomorphic filters |
 | `preparation_log`, `shard_logs`, `merge_log` | Stage logs |
 
@@ -135,6 +188,8 @@ on changes to that script and provides a manual trigger. A Dockerfile-only
 change requires the manual trigger. Successful runs on `main` publish an
 image tagged with the full commit SHA. Set `docker_image` to that tested tag
 or its digest. The image has not been built or published during this task.
+Use an image that contains the updated preparation script and its QC
+arguments with this WDL.
 
 The root validation Actions workflow checks all three WDL descriptors with
 miniwdl and Cromwell's parser. It runs unit and command tests, then a real
@@ -142,7 +197,9 @@ PLINK2/tensorQTL/R CPU smoke test. The smoke test compares raw permutations
 and global q-values from sharded and unsharded inputs. It checks cis
 boundaries, extracted genotypes, sample IDs, groups, an empty shard, and
 mixed chromosome shards. It also checks fractional dosage retention and
-the dosage mapping path. The image workflow runs that smoke test in its
+the dosage mapping path. The QC cases check observed MAC and missingness
+boundaries, phenotype sample subsets, hard calls versus dosages, and
+windows emptied by filtering. The image workflow runs that smoke test in its
 candidate container before publication. These Actions checks have been
 configured; a local check does not prove that they passed on GitHub.
 

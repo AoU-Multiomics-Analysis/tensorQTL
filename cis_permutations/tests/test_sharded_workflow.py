@@ -61,7 +61,8 @@ class ShardedWorkflowTests(unittest.TestCase):
         types = {b.name: b.value.type for b in merge.available_inputs}
         self.assertIsInstance(types['results'].item_type, WDL.Type.File)
 
-    def run_command(self, name, cloud_key=None, localize=True, cloud_command_files=False, result_count=1):
+    def run_command(self, name, cloud_key=None, localize=True, cloud_command_files=False, result_count=1,
+                    input_overrides=None):
         with tempfile.TemporaryDirectory() as tmp:
             root = Path(tmp)
             write_dir = root/'command-files'
@@ -84,6 +85,7 @@ class ShardedWorkflowTests(unittest.TestCase):
                 values[key] = entries if key == 'results' else entries[0]
             if name != 'prepare_cis':
                 values['prefix'] = 'test'
+            values.update(input_overrides or {})
             command = render_task(name, values, write_dir, mapping if localize else None,
                                   cloud_command_files=cloud_command_files)
             # The image includes this script. Substitute only its installed location.
@@ -98,6 +100,52 @@ class ShardedWorkflowTests(unittest.TestCase):
             if args and '--results-list' in args:
                 list_text = (root / args[args.index('--results-list')+1]).read_text()
             return process, args, mapping, list_text
+
+    def test_preparation_passes_default_variant_qc_limits(self):
+        process, args, _, _ = self.run_command('prepare_cis')
+        self.assertEqual(process.returncode, 0, process.stderr)
+        self.assertIn('--min-mac', args)
+        self.assertEqual(args[args.index('--min-mac') + 1], '10')
+        self.assertIn('--max-missing-fraction', args)
+        self.assertEqual(float(args[args.index('--max-missing-fraction') + 1]), 0.05)
+        self.assertNotIn('--dosages', args)
+
+    def test_preparation_passes_qc_overrides_and_dosage_mode_after_localization(self):
+        task = next(t for t in WDL.load(str(DESCRIPTOR)).tasks if t.name == 'prepare_cis')
+        for name in ['min_mac', 'max_missing_fraction', 'dosages']:
+            self.assertIn(name, {binding.name for binding in task.available_inputs})
+        for dosages in [False, True]:
+            with self.subTest(dosages=dosages):
+                process, args, mapping, _ = self.run_command('prepare_cis', input_overrides={
+                    'min_mac': 17, 'max_missing_fraction': 0.02, 'dosages': dosages})
+                self.assertEqual(process.returncode, 0, process.stderr)
+                self.assertEqual(args[args.index('--min-mac') + 1], '17')
+                self.assertEqual(float(args[args.index('--max-missing-fraction') + 1]), 0.02)
+                self.assertEqual('--dosages' in args, dosages)
+                for path in mapping.values():
+                    self.assertIn(path, args)
+                self.assertFalse(any('gs://' in arg for arg in args))
+
+    def test_workflow_passes_qc_values_to_preparation_and_exposes_report(self):
+        doc = WDL.load(str(DESCRIPTOR))
+        prepare = next(t for t in doc.tasks if t.name == 'prepare_cis')
+        task_outputs = {decl.name: decl for decl in prepare.outputs}
+        workflow_outputs = {decl.name: decl for decl in doc.workflow.outputs}
+        self.assertIn('variant_qc', task_outputs)
+        self.assertIn('variant_qc', workflow_outputs)
+        self.assertIsInstance(task_outputs['variant_qc'].type, WDL.Type.File)
+        self.assertIsInstance(workflow_outputs['variant_qc'].type, WDL.Type.File)
+        call = next(node for node in doc.workflow.body if isinstance(node, WDL.Tree.Call)
+                    and node.name == 'prepare_cis')
+        values = WDL.Env.Bindings().bind('min_mac', WDL.Value.Int(17)).bind(
+            'max_missing_fraction', WDL.Value.Float(0.02)).bind('dosages', WDL.Value.Boolean(True))
+        stdlib = CommandStdLib('1.0')
+        for name, expected in [('min_mac', 17), ('max_missing_fraction', 0.02), ('dosages', True)]:
+            self.assertIn(name, call.inputs)
+            self.assertEqual(call.inputs[name].eval(values, stdlib).value, expected)
+        report_values = WDL.Env.Bindings().bind('prepare_cis.variant_qc', WDL.Value.File('/localized/variant_qc.tsv'))
+        self.assertEqual(workflow_outputs['variant_qc'].expr.eval(report_values, stdlib).value,
+                         '/localized/variant_qc.tsv')
 
     def test_merge_list_stays_local_when_generated_files_have_cloud_names(self):
         for count in [1, 3]:

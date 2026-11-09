@@ -13,6 +13,8 @@ workflow tensorqtl_cis_permutations_sharded {
         Int cis_window = 1000000
         Int max_phenotypes_per_shard = 250
         Int max_variants_per_shard = 100000
+        Int min_mac = 10
+        Float max_missing_fraction = 0.05
         Int permutations = 10000
         Float maf_threshold = 0.0
         Int seed = 1
@@ -41,6 +43,7 @@ workflow tensorqtl_cis_permutations_sharded {
             phenotype_groups = phenotype_groups, docker_image = docker_image,
             cis_window = cis_window, max_phenotypes_per_shard = max_phenotypes_per_shard,
             max_variants_per_shard = max_variants_per_shard,
+            min_mac = min_mac, max_missing_fraction = max_missing_fraction, dosages = dosages,
             cpu = prepare_cpu, memory_gb = prepare_memory_gb, disk_gb = prepare_disk_gb,
             zones = zones, preemptible = preemptible
     }
@@ -75,6 +78,7 @@ workflow tensorqtl_cis_permutations_sharded {
     output {
         File cis_qtl = merge_cis.cis_qtl
         File manifest = prepare_cis.manifest
+        File variant_qc = prepare_cis.variant_qc
         File preparation_skipped = prepare_cis.skipped
         File preparation_log = prepare_cis.log
         File merge_log = merge_cis.log
@@ -87,8 +91,10 @@ workflow tensorqtl_cis_permutations_sharded {
         cis_window: "Distance in bp on each side of a phenotype's one-based start and end."
         max_variants_per_shard: "Target variant count in the union of complete cis windows. A single phenotype or group can exceed it."
         max_phenotypes_per_shard: "Target phenotype count. Groups are kept complete."
+        min_mac: "Minimum observed diploid-coded minor allele count before sharding and imputation, across all phenotype samples."
+        max_missing_fraction: "Maximum fraction of phenotype samples with missing genotypes before sharding and imputation."
         prepare_disk_gb: "Space for the source PLINK triplet, all extracted shards, and temporary files."
-        dosages: "Read PGEN dosages instead of hard calls. PLINK extraction retains dosage data."
+        dosages: "Use PGEN dosages for preparation QC and mapping instead of hard calls. PLINK extraction retains dosage data."
     }
     meta {
         description: "Prepare complete cis windows, scatter phenotype shards, then calculate global Storey q-values."
@@ -107,6 +113,9 @@ task prepare_cis {
         Int cis_window = 1000000
         Int max_phenotypes_per_shard = 250
         Int max_variants_per_shard = 100000
+        Int min_mac = 10
+        Float max_missing_fraction = 0.05
+        Boolean dosages = false
         Int cpu = 4
         Int memory_gb = 32
         Int disk_gb = 500
@@ -132,7 +141,9 @@ task prepare_cis {
               --phenotype-bed "$bed" --covariates "$cov" --cis-window ~{cis_window}
               --max-phenotypes-per-shard ~{max_phenotypes_per_shard}
               --max-variants-per-shard ~{max_variants_per_shard}
+              --min-mac ~{min_mac} --max-missing-fraction ~{max_missing_fraction}
               --threads ~{cpu} --plink-memory-mb ~{memory_gb * 512})
+        if ~{dosages}; then args+=(--dosages); fi
         if [[ -n "$groups" ]]; then check_file "$groups"; args+=(--phenotype-groups "$groups"); fi
         log "Start phenotype and genotype preparation."
         python3 -u /opt/tensorqtl/sharded_cis.py "${args[@]}"
@@ -148,6 +159,7 @@ task prepare_cis {
         Array[File] phenotype_beds = glob("shards/*.phenotypes.bed.gz")
         Array[File] phenotype_groups_files = glob("shards/*.groups.tsv")
         File manifest = "shards.manifest.tsv"
+        File variant_qc = "variant_qc.tsv"
         File skipped = "preparation.skipped.tsv"
         File log = "preparation.log"
     }

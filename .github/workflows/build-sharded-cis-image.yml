@@ -25,7 +25,7 @@ jobs:
         run: echo "name=ghcr.io/${GITHUB_REPOSITORY,,}-sharded-cis" >> "$GITHUB_OUTPUT"
       - uses: docker/setup-buildx-action@v3
       - name: Build candidate image
-        uses: docker/build-push-action@v6
+        uses: docker/build-push-action@v7
         with:
           context: .
           file: cis_permutations/envs/Dockerfile.sharded
